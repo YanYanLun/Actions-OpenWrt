@@ -9,12 +9,190 @@
 # This is free software, licensed under the MIT License.
 # See /LICENSE for more information.
 #
+# ---------------------------------------------------------------------------
+# 本项目改动：HiWiFi HC5761 换装 32MB SPI Flash 的分区适配
+#
+# 上游（ImmortalWrt openwrt-23.05）HC5761 的 16MB 布局：
+#   u-boot    0x000000 0x030000  (192K)
+#   hw_panic  0x030000 0x010000
+#   factory   0x040000 0x010000  (art/EEPROM + MAC@0x4 + 5G eeprom@0x8000)
+#   firmware  0x050000 0x0F7000  -> 到 0xFC0000 结束  (IMAGE_SIZE 15808k)
+#   oem       0xFC0000 0x020000
+#   bdinfo    0xFE0000 0x010000
+#   backup    0xFF0000 0x010000
+#
+# 本脚本生成的 32MB 布局：
+#   u-boot / hw_panic / factory 三段位置完全不动
+#     —— Breed 的 u-boot(0x0) 与 art(0x40000) 备份位置必须保持不变，
+#        动了就会刷完不认 art、没有 MAC、没有无线
+#   firmware  0x050000 0x1FB0000 -> 到 0x2000000（整 32MB）结束
+#   同时把 mt7620.mk 里 hiwifi_hc5761 的 IMAGE_SIZE 改成 32448k，
+#   否则镜像大小校验还按 16MB 那套走。
+#
+# 注意：分区定义在共用文件 mt7620a_hiwifi_hc5x61.dtsi 里（hc5661/hc5761 共用），
+#      所以这里复制一份新的 32M dtsi，只让 hc5761 引用它，不改上游原文件。
+# ---------------------------------------------------------------------------
+set -euo pipefail
 
-# Modify default IP
-#sed -i 's/192.168.1.1/192.168.50.5/g' package/base-files/files/bin/config_generate
+DTS_DIR=target/linux/ramips/dts
+DEV_DTS=$DTS_DIR/mt7620a_hiwifi_hc5761.dts
+SRC_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61.dtsi
+DST_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61-32m.dtsi
+IMAGE_MK=target/linux/ramips/image/mt7620.mk
 
-# Modify default theme
-#sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile
+echo "=== [1/4] 检查源码结构 ==="
+for f in "$DEV_DTS" "$SRC_DTSI" "$IMAGE_MK"; do
+    if [ ! -f "$f" ]; then
+        echo "!! 缺少文件：$f"
+        echo "!! 源码分支或目录结构和预期不一致，终止（避免白跑 3 小时）"
+        exit 1
+    fi
+done
 
-# Modify hostname
-#sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
+echo "=== [2/4] 复制分区定义并改成 32MB 布局 ==="
+cp "$SRC_DTSI" "$DST_DTSI"
+
+python3 - "$DST_DTSI" <<'PY'
+import re
+import sys
+import pathlib
+
+FLASH_SIZE = 0x2000000   # 32MB
+FW_START = 0x50000       # 与上游 firmware 起始偏移保持一致
+FW_SIZE = FLASH_SIZE - FW_START   # 0x1FB0000
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+
+PART_RE = re.compile(r'^(\s*)(?:[A-Za-z0-9_]+:\s*)?partition@([0-9a-fA-F]+)\s*\{\s*$')
+REG_RE = re.compile(r'\breg\s*=\s*<0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)>')
+
+
+def parse(text_lines):
+    blocks, i = [], 0
+    while i < len(text_lines):
+        m = PART_RE.match(text_lines[i])
+        if not m:
+            i += 1
+            continue
+        indent = m.group(1)
+        addr = int(m.group(2), 16)
+        j, label, off, size = i + 1, None, None, None
+        while j < len(text_lines):
+            if re.match(r'^%s\};' % re.escape(indent), text_lines[j]):
+                break
+            lm = re.search(r'label\s*=\s*"([^"]+)"', text_lines[j])
+            if lm and label is None:
+                label = lm.group(1)
+            rm = REG_RE.search(text_lines[j])
+            if rm and off is None:
+                off, size = int(rm.group(1), 16), int(rm.group(2), 16)
+            j += 1
+        blocks.append({'addr': addr, 'label': label, 'off': off, 'size': size,
+                       'start': i, 'end': j})
+        i = j + 1
+    return blocks
+
+
+parts = parse(lines)
+if not parts:
+    sys.exit('!! dtsi 里解析不到 partition 节点，终止')
+
+fw = [p for p in parts if p['label'] == 'firmware']
+if len(fw) != 1:
+    sys.exit('!! 找不到唯一的 firmware 分区（匹配到 %d 个），终止' % len(fw))
+
+factory = [p for p in parts if p['label'] == 'factory']
+if len(factory) != 1 or factory[0]['addr'] != 0x40000:
+    sys.exit('!! factory(art) 分区不在 0x40000，Breed 的 art 位置会错位，终止')
+
+# 1) 重写 firmware 的 reg 为 32MB 大小
+hit = None
+for k in range(fw[0]['start'], fw[0]['end'] + 1):
+    m = REG_RE.search(lines[k])
+    if m and hit is None:
+        lines[k] = lines[k][:m.start()] + 'reg = <0x%x 0x%x>' % (FW_START, FW_SIZE) + lines[k][m.end():]
+        hit = k
+if hit is None:
+    sys.exit('!! firmware 分区里没有 reg 属性，终止')
+
+# 2) 删掉 16MB 布局末尾的 OEM 分区（扩容后会与 firmware 重叠，重叠分区直接起不来）
+drop = [p for p in parts if p['label'] in ('oem', 'bdinfo', 'backup')]
+if len(drop) != 3:
+    print('    !! 预期 3 个 OEM 分区，实际匹配到 %d 个（继续执行，请留意日志）' % len(drop))
+for p in sorted(drop, key=lambda b: b['start'], reverse=True):
+    print('    删除 OEM 分区：%-8s 0x%08x (%dK)' % (p['label'], p['off'] or 0, (p['size'] or 0) // 1024))
+    del lines[p['start']:p['end'] + 1]
+
+new_text = ''.join(lines)
+
+# 3) 校验：不重叠 + 正好铺满 32MB + firmware 尺寸正确
+new_parts = parse(new_text.splitlines(keepends=True))
+print('    32MB 分区表：')
+prev = 0
+for p in sorted(new_parts, key=lambda b: b['off'] if b['off'] is not None else 1 << 40):
+    if p['off'] is None or p['size'] is None:
+        sys.exit('!! 分区 %s 缺少 reg 属性，终止' % p['label'])
+    if p['off'] < prev:
+        sys.exit('!! 分区 %s 与上一个分区重叠，终止' % p['label'])
+    prev = p['off'] + p['size']
+    print('      %-9s 0x%08x - 0x%08x  (%dK)' % (p['label'], p['off'], prev, p['size'] // 1024))
+
+if prev != FLASH_SIZE:
+    sys.exit('!! 分区表总长 0x%x，不是整 32MB（0x%x），终止' % (prev, FLASH_SIZE))
+
+fw2 = [p for p in new_parts if p['label'] == 'firmware'][0]
+if fw2['off'] != FW_START or fw2['size'] != FW_SIZE:
+    sys.exit('!! firmware 分区不是 0x%x + 0x%x，终止' % (FW_START, FW_SIZE))
+
+path.write_text(new_text, encoding='utf-8')
+print('    32M 分区定义写入成功：%s' % path.name)
+PY
+
+echo "=== [3/4] 让 HC5761 引用 32M 分区定义 ==="
+python3 - "$DEV_DTS" "$DST_DTSI" <<'PY'
+import sys
+import pathlib
+
+dev = pathlib.Path(sys.argv[1])
+new_name = pathlib.Path(sys.argv[2]).name
+text = dev.read_text(encoding='utf-8')
+old = '#include "mt7620a_hiwifi_hc5x61.dtsi"'
+if old not in text:
+    sys.exit('!! mt7620a_hiwifi_hc5761.dts 里没有原来的 dtsi 引用，上游结构变了，终止')
+dev.write_text(text.replace(old, '#include "%s"' % new_name), encoding='utf-8')
+print('    %s -> #include "%s"' % (old, new_name))
+PY
+
+echo "=== [4/4] 修改 mt7620.mk 的 IMAGE_SIZE ==="
+python3 - "$IMAGE_MK" <<'PY'
+import re
+import sys
+import pathlib
+
+IMAGE_SIZE_K = 32448   # = 0x1FB0000 / 1024，与 32M firmware 分区大小严格一致
+
+mk = pathlib.Path(sys.argv[1])
+text = mk.read_text(encoding='utf-8')
+
+m = re.search(r'define Device/hiwifi_hc5761\b[\s\S]*?\nendef', text)
+if not m:
+    sys.exit('!! mt7620.mk 里找不到 hiwifi_hc5761 设备定义，终止')
+
+block = m.group(0)
+old = re.search(r'IMAGE_SIZE\s*:=\s*[0-9]+[kKmM]', block)
+if not old:
+    sys.exit('!! hiwifi_hc5761 里没有 IMAGE_SIZE，终止')
+
+new_block, n = re.subn(r'IMAGE_SIZE\s*:=\s*[0-9]+[kKmM]',
+                       'IMAGE_SIZE := %dk' % IMAGE_SIZE_K, block)
+if n != 1:
+    sys.exit('!! IMAGE_SIZE 匹配到 %d 处（应只有 1 处），终止' % n)
+
+mk.write_text(text[:m.start()] + new_block + text[m.end():], encoding='utf-8')
+print('    IMAGE_SIZE: %s  ->  IMAGE_SIZE := %dk' % (old.group(0), IMAGE_SIZE_K))
+PY
+
+echo "=== 32M 补丁全部完成 ==="
+grep -E 'IMAGE_SIZE|DEVICE_MODEL' "$IMAGE_MK" | sed -n '1,40p' >/dev/null 2>&1 || true
+echo "补丁完成，firmware 分区 = 0x50000 ~ 0x2000000，IMAGE_SIZE = 32448k"
