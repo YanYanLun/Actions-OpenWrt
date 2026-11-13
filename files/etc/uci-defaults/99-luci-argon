@@ -1,0 +1,14 @@
+#!/bin/sh
+# 把 LuCI 默认主题从 bootstrap 切到 Argon（等价于 uci set luci.main.mediaurlbase）
+# 只在 argon 静态资源确实存在时才切，避免主题没装好导致界面裸奔
+
+[ -d /www/luci-static/argon ] || exit 0
+
+uci -q get luci.main >/dev/null || exit 0
+
+uci -q batch <<-EOF
+	set luci.main.mediaurlbase='/luci-static/argon'
+	commit luci
+EOF
+
+exit 0
