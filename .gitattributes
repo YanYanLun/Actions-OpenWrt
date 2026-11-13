@@ -1,6 +1,8 @@
 # GitHub Actions 里跑的脚本必须是 LF，否则 bash 会报 bad interpreter
-*.sh      text eol=lf
-*.yml     text eol=lf
-*.yaml    text eol=lf
-.config   text eol=lf
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+.config     text eol=lf
+.gitattributes text eol=lf
 feeds.conf.default text eol=lf
