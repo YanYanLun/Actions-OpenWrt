@@ -5,6 +5,9 @@
 
 var NESTED = /^(kernel|rootfs|rootfs_data)$/;
 var HIST = 60;
+var POLL_MS = 1000;
+var TEXT_MS = 50;
+var DRAW_MS = 66;
 var PAGE_TITLE = '首页';
 
 function parseCpu(txt) {
@@ -175,7 +178,7 @@ function smoothPath(ctx, pts) {
 	ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 
-function drawSeries(ctx, W, H, series, style, scaleMax) {
+function drawSeries(ctx, W, H, series, style, scaleMax, frac) {
 	if (!series || series.length < 2)
 		return;
 
@@ -183,10 +186,12 @@ function drawSeries(ctx, W, H, series, style, scaleMax) {
 
 	if (max <= 0) max = 1;
 
-	var n = series.length,
-	    step = W / (n - 1),
+	var step = W / (HIST - 1),
+	    n = series.length,
+	    off = (frac || 0) * step,
 	    pts = series.map(function(v, i) {
-	    	return [ i * step, H - (Math.min(v, max) / max) * (H - 16) - 8 ];
+	    	return [ W - (n - 1 - i) * step - off,
+	    	        H - (Math.min(v, max) / max) * (H - 16) - 8 ];
 	    });
 
 	var g = ctx.createLinearGradient(0, 0, 0, H);
@@ -196,31 +201,34 @@ function drawSeries(ctx, W, H, series, style, scaleMax) {
 
 	ctx.beginPath();
 	smoothPath(ctx, pts);
+	ctx.lineTo(W, pts[n - 1][1]);
 	ctx.lineTo(W, H);
-	ctx.lineTo(0, H);
+	ctx.lineTo(Math.max(pts[0][0], 0), H);
+	ctx.lineTo(Math.max(pts[0][0], 0), pts[0][1]);
 	ctx.closePath();
 	ctx.fillStyle = g;
 	ctx.fill();
 
 	ctx.beginPath();
 	smoothPath(ctx, pts);
+	ctx.lineTo(W, pts[n - 1][1]);
 	ctx.strokeStyle = style.stroke;
 	ctx.lineWidth = 2;
 	ctx.stroke();
 
 	ctx.beginPath();
-	ctx.arc(pts[n - 1][0], pts[n - 1][1], 2.6, 0, Math.PI * 2);
+	ctx.arc(pts[n - 1][0], pts[n - 1][1], 2.4, 0, Math.PI * 2);
 	ctx.fillStyle = style.stroke;
 	ctx.fill();
 }
 
-function drawChart(cv, seriesList, scaleMax) {
+function drawChart(cv, seriesList, scaleMax, frac) {
 	var ctx = cv.getContext('2d');
 
 	ctx.clearRect(0, 0, cv.width, cv.height);
 
 	seriesList.forEach(function(s) {
-		drawSeries(ctx, cv.width, cv.height, s.data, s, scaleMax);
+		drawSeries(ctx, cv.width, cv.height, s.data, s, scaleMax, frac);
 	});
 }
 
@@ -246,8 +254,8 @@ function drawDonut(cv, segs) {
 		var a1 = a0 + s.v / total * Math.PI * 2;
 
 		ctx.beginPath();
-		ctx.arc(cx, cy, r, a0, a1);
-		ctx.arc(cx, cy, r0, a1, a0, true);
+		ctx.arc(cx, cy, r, a0, Math.max(a1, a0 + 0.0001));
+		ctx.arc(cx, cy, r0, Math.max(a1, a0 + 0.0001), a0, true);
 		ctx.closePath();
 		ctx.fillStyle = s.c;
 		ctx.fill();
@@ -315,15 +323,19 @@ return view.extend({
 	render: function() {
 		var cpuHist = [], memHist = [], rxHist = [], txHist = [],
 		    prevCpu = null, prevNet = null, prevT = null,
-		    statLoaded = false, last = {},
-		    refs = {};
+		    statLoaded = false, last = {}, refs = {},
+		    target = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
+		    shown = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
+		    tipDl = 0, tipUl = 0, tipCpu = 0, tipMem = 0,
+		    started = 0, lastTs = 0, lastPoll = 0, lastDraw = 0, lastText = 0,
+		    pollId = 0, stopped = false, donutKey = '';
 
 		var css = [
 			'.home{ font-size:13px; }',
 			'.home-grid{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }',
 			'.home-card{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:12px 14px; }',
 			'.home-card h4{ margin:0 0 8px; font-size:12px; font-weight:600; opacity:.62; letter-spacing:.4px; }',
-			'.home-big{ font-size:25px; font-weight:700; line-height:1.25; }',
+			'.home-big{ font-size:25px; font-weight:700; line-height:1.25; font-variant-numeric:tabular-nums; }',
 			'.home-sub{ font-size:12px; opacity:.6; margin-bottom:8px; }',
 			'.home-cv{ display:block; width:100%; border-radius:6px; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
@@ -334,7 +346,7 @@ return view.extend({
 			'.home-info span{ opacity:.6; margin-right:6px; }',
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
-			'.home-head .val{ font-size:12px; opacity:.72; }',
+			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
 			'.home-donut{ margin:0 auto; width:150px; height:150px; }',
 			/* SHORTCUTS:BEGIN */
 			'.home-quick{ display:grid; gap:10px; grid-template-columns:repeat(8,minmax(0,1fr)); margin-bottom:12px; }',
@@ -349,11 +361,11 @@ return view.extend({
 			/* SHORTCUTS:END */			'@media (max-width:820px){ .home-wide{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
-		var cvCpu = E('canvas', { class: 'home-cv', width: 600, height: 120, style: 'height:58px' }),
-		    cvMem = E('canvas', { class: 'home-cv', width: 600, height: 120, style: 'height:58px' }),
-		    cvNet = E('canvas', { class: 'home-cv', width: 1200, height: 300, style: 'height:170px' }),
+		var cvCpu = E('canvas', { class: 'home-cv', width: 480, height: 96, style: 'height:52px' }),
+		    cvMem = E('canvas', { class: 'home-cv', width: 480, height: 96, style: 'height:52px' }),
+		    cvNet = E('canvas', { class: 'home-cv', width: 900, height: 220, style: 'height:170px' }),
 		    cvDonut = E('canvas', { class: 'home-cv home-donut', width: 320, height: 320 }),
-		    cvFlash = E('canvas', { class: 'home-cv', width: 1200, height: 24, style: 'height:12px' });
+		    cvFlash = E('canvas', { class: 'home-cv', width: 900, height: 24, style: 'height:12px' });
 
 		refs.cpuVal = E('div', { class: 'home-big' }, '—');
 		refs.cpuSub = E('div', { class: 'home-sub' }, '采样中…');
@@ -425,12 +437,23 @@ return view.extend({
 			while (arr.length > HIST) arr.shift();
 		};
 
+		var frame = function(fn) {
+			if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+			else setTimeout(function() { fn(Date.now()); }, 16);
+		};
+
+		var nowMs = function() {
+			return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+		};
+
 		var BLUE = { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.32)', fillBottom: 'rgba(47,126,247,.02)' },
 		    GREEN = { stroke: '#10a374', fillTop: 'rgba(16,163,116,.26)', fillBottom: 'rgba(16,163,116,.02)' },
 		    PURPLE = { stroke: '#7c5cf0', fillTop: 'rgba(124,92,240,.28)', fillBottom: 'rgba(124,92,240,.02)' };
 
-		var tick = function() {
-			var t = Date.now();
+		var netName = '', cores = 0;
+
+		var poll = function() {
+			var t = nowMs();
 
 			Promise.all([
 				safe(fs.read('/proc/stat')),
@@ -446,38 +469,21 @@ return view.extend({
 				    pct = cpuPercent(prevCpu, cpu);
 
 				if (pct !== null) {
+					target.cpu = pct;
 					push(cpuHist, pct);
-					refs.cpuVal.textContent = pct.toFixed(1) + ' %';
-					refs.cpuSub.textContent = cpuCores(r[0]) + ' 核 · 每 4 秒采样';
-					drawChart(cvCpu, [ { data: cpuHist, stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom } ], 100);
 				}
 
 				prevCpu = cpu;
+				cores = cpuCores(r[0]) || cores;
 
 				var mem = parseMem(r[1]);
 
 				if (mem) {
-					var usedPct = mem.used / mem.total * 100;
-
-					push(memHist, usedPct);
-					refs.memVal.textContent = usedPct.toFixed(1) + ' %';
-					refs.memSub.textContent = bytes(mem.used) + ' / ' + bytes(mem.total);
-					drawChart(cvMem, [ { data: memHist, stroke: PURPLE.stroke, fillTop: PURPLE.fillTop, fillBottom: PURPLE.fillBottom } ], 100);
-
-					drawDonut(cvDonut, [
-						{ v: mem.used, c: '#2f7ef7' },
-						{ v: mem.cache, c: '#f0b429' },
-						{ v: mem.free, c: 'rgba(128,128,128,.35)' }
-					]);
-
-					refs.donutLegend.textContent = '';
-					[ [ '已用 ' + bytes(mem.used), '#2f7ef7' ],
-					  [ '缓存 ' + bytes(mem.cache), '#f0b429' ],
-					  [ '可用 ' + bytes(mem.free), 'rgba(128,128,128,.5)' ] ].forEach(function(x) {
-						refs.donutLegend.appendChild(E('span', {}, [
-							E('i', { style: 'background:' + x[1] }), x[0]
-						]));
-					});
+					target.memUsed = mem.used;
+					target.memCache = mem.cache;
+					target.memFree = mem.free;
+					target.memTotal = mem.total;
+					push(memHist, mem.used / mem.total * 100);
 				}
 
 				var net = parseNet(r[2]);
@@ -485,28 +491,21 @@ return view.extend({
 				if (net && prevNet && prevT) {
 					var dt = (t - prevT) / 1000;
 
-					if (dt > 0.5) {
-						var rx = Math.max(0, (net.rx - prevNet.rx) / dt) / 1024,
-						    tx = Math.max(0, (net.tx - prevNet.tx) / dt) / 1024;
+					if (dt > 0.2) {
+						var dl = Math.max(0, (net.rx - prevNet.rx) / dt) / 1024,
+						    ul = Math.max(0, (net.tx - prevNet.tx) / dt) / 1024;
 
-						push(rxHist, rx);
-						push(txHist, tx);
-
-						refs.netVal.textContent = '↓ ' + rate(rx * 1024);
-						refs.netSub.textContent = '↑ ' + rate(tx * 1024) + ' · 接口 ' + net.name;
-						refs.netHead.textContent = '下载 ' + rate(rx * 1024) + ' ／ 上传 ' + rate(tx * 1024);
-
-						var top = Math.max.apply(null, rxHist.concat(txHist).concat([ 10 ])) * 1.06;
-
-						drawChart(cvNet, [
-							{ data: rxHist, stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom },
-							{ data: txHist, stroke: GREEN.stroke, fillTop: GREEN.fillTop, fillBottom: GREEN.fillBottom }
-						], top);
+						target.dl = dl;
+						target.ul = ul;
+						push(rxHist, dl);
+						push(txHist, ul);
+						netName = net.name;
 					}
 				}
 
 				prevNet = net;
 				prevT = t;
+				lastPoll = nowMs();
 
 				refs.upVal.textContent = uptimeText(parseUptime(r[3]));
 				refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
@@ -544,7 +543,7 @@ return view.extend({
 					refs.info.textContent = '';
 					[ [ '型号', (r[7] || '').trim() || '未知' ],
 					  [ '内核', parseKernel(r[6]) ],
-					  [ 'CPU 核数', String(cpuCores(r[0])) ] ].forEach(function(x) {
+					  [ 'CPU 核数', String(cores) ] ].forEach(function(x) {
 						refs.info.appendChild(E('div', {}, [ E('span', {}, x[0]), x[1] ]));
 					});
 
@@ -553,8 +552,134 @@ return view.extend({
 			});
 		};
 
-		tick();
-		setInterval(tick, 4000);
+		var paintText = function() {
+			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
+			    tCpu = shown.cpu.toFixed(1) + ' %',
+			    tMem = memPct.toFixed(1) + ' %',
+			    tDl = '↓ ' + rate(shown.dl * 1024),
+			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : '');
+
+			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
+			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
+			if (refs.netVal.textContent !== tDl) refs.netVal.textContent = tDl;
+			if (refs.netSub.textContent !== tUl) refs.netSub.textContent = tUl;
+
+			var tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
+			    tCpuSub = cores + ' 核 · 实时刷新',
+			    tHead = '下载 ' + rate(shown.dl * 1024) + ' ／ 上传 ' + rate(shown.ul * 1024);
+
+			if (refs.cpuSub.textContent !== tCpuSub) refs.cpuSub.textContent = tCpuSub;
+			if (refs.memSub.textContent !== tMemSub) refs.memSub.textContent = tMemSub;
+			if (refs.netHead.textContent !== tHead) refs.netHead.textContent = tHead;
+		};
+
+		var paintCharts = function(ts) {
+			var frac = lastPoll ? Math.max(0, Math.min(1, (ts - lastPoll) / POLL_MS)) : 0;
+
+			if (cpuHist.length >= 2)
+				drawChart(cvCpu, [ {
+					data: cpuHist.slice(0, -1).concat([ shown.cpu ]),
+					stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom
+				} ], 100, frac);
+
+			if (memHist.length >= 2)
+				drawChart(cvMem, [ {
+					data: memHist.slice(0, -1).concat([ shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0 ]),
+					stroke: PURPLE.stroke, fillTop: PURPLE.fillTop, fillBottom: PURPLE.fillBottom
+				} ], 100, frac);
+
+			if (rxHist.length >= 2) {
+				var top = Math.max.apply(null, rxHist.concat(txHist).concat([ shown.dl, shown.ul, 10 ])) * 1.06;
+
+				drawChart(cvNet, [
+					{ data: rxHist.slice(0, -1).concat([ shown.dl ]), stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom },
+					{ data: txHist.slice(0, -1).concat([ shown.ul ]), stroke: GREEN.stroke, fillTop: GREEN.fillTop, fillBottom: GREEN.fillBottom }
+				], top, frac);
+			}
+
+			/* 饼图按 0.5% 量化去重：数值稳定时不重复重绘，省这颗 CPU */
+			var dk = Math.round(shown.memUsed / (shown.memTotal || 1) * 200) + ':' +
+			         Math.round(shown.memCache / (shown.memTotal || 1) * 200) + ':' +
+			         Math.round(shown.memFree / (shown.memTotal || 1) * 200);
+
+			if (donutKey !== dk) {
+				donutKey = dk;
+
+				drawDonut(cvDonut, [
+					{ v: shown.memUsed, c: '#2f7ef7' },
+					{ v: shown.memCache, c: '#f0b429' },
+					{ v: shown.memFree, c: 'rgba(128,128,128,.35)' }
+				]);
+			}
+
+			if (refs.donutLegend._k !== dk) {
+				refs.donutLegend._k = dk;
+				refs.donutLegend.textContent = '';
+				[ [ '已用 ' + bytes(shown.memUsed), '#2f7ef7' ],
+				  [ '缓存 ' + bytes(shown.memCache), '#f0b429' ],
+				  [ '可用 ' + bytes(shown.memFree), 'rgba(128,128,128,.5)' ] ].forEach(function(x) {
+					refs.donutLegend.appendChild(E('span', {}, [
+						E('i', { style: 'background:' + x[1] }), x[0]
+					]));
+				});
+			}
+		};
+
+		var KEYS = [ 'cpu', 'memUsed', 'memCache', 'memFree', 'memTotal', 'dl', 'ul' ];
+
+		var animate = function(ts) {
+			if (stopped)
+				return;
+
+			if (!started)
+				started = ts;
+
+			/* 页面切走后自动停机，避免后台空转 */
+			if (root && root.isConnected === false && ts - started > 1200) {
+				stopped = true;
+				if (pollId) clearInterval(pollId);
+				return;
+			}
+
+			if (!lastTs)
+				lastTs = ts;
+
+			var dt = Math.min(Math.max(ts - lastTs, 0), 250);
+
+			lastTs = ts;
+
+			/* 数字：按时间常数 ~160ms 指数逼近，肉眼看到的是连续爬升而不是秒跳 */
+			var a = 1 - Math.exp(-dt / 160);
+
+			for (var i = 0; i < KEYS.length; i++) {
+				var k = KEYS[i];
+
+				shown[k] += (target[k] - shown[k]) * a;
+
+				if (Math.abs(target[k] - shown[k]) < 0.004) shown[k] = target[k];
+			}
+
+			tipCpu = shown.cpu;
+			tipUl = shown.ul;
+			tipDl = shown.dl;
+			tipMem = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0;
+
+			if (ts - lastText >= TEXT_MS) {
+				lastText = ts;
+				paintText();
+			}
+
+			if (ts - lastDraw >= DRAW_MS) {
+				lastDraw = ts;
+				paintCharts(ts);
+			}
+
+			frame(animate);
+		};
+
+		poll();
+		pollId = setInterval(poll, POLL_MS);
+		frame(animate);
 
 		return root;
 	},
