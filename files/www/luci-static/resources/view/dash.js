@@ -369,6 +369,25 @@ function drawStack(cv, segs) {
 	});
 }
 
+/* /proc/cpuinfo：system type / cpu model / BogoMIPS，用于显示 CPU 型号与架构 */
+function parseCpuInfo(txt) {
+	var o = {};
+
+	(txt || '').split('\n').forEach(function(l) {
+		var m = l.match(/^([A-Za-z ]+?)\s*:\s*(.+)$/);
+
+		if (m && !o[m[1].trim().toLowerCase()])
+			o[m[1].trim().toLowerCase()] = m[2].trim();
+	});
+
+	return {
+		system: o['system type'] || o['hardware'] || '',
+		model: o['cpu model'] || o['model name'] || '',
+		bogo: Number(o['bogomips']) || 0,
+		mhz: Number(o['cpu mhz']) || 0
+	};
+}
+
 return view.extend({
 	parseCpu: parseCpu,
 	cpuPercent: cpuPercent,
@@ -408,17 +427,20 @@ return view.extend({
 			'.home-shot{ position:relative; height:176px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:176px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
+			'.home-two{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); margin-top:12px; }',
+			'.home-rate{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
+			'.home-rate .lb{ font-size:12px; opacity:.62; margin-bottom:2px; }',
 			'.home-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-top:8px; }',
 			'.home-legend.center{ justify-content:center; gap:22px; }',
 			'.home-legend i{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }',
-			'.home-info{ display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-top:12px;',
-			'  font-size:12px; border:1px solid rgba(0,0,0,.06); border-radius:10px; padding:10px 14px; }',
-			'.home-info span{ opacity:.6; margin-right:6px; }',
+			'.home-info{ display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); font-size:12px; }',
+			'.home-info span{ display:block; opacity:.58; margin-bottom:3px; }',
+			'.home-info b{ font-weight:600; font-variant-numeric:tabular-nums; }',
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
 			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
 			'.home-donut{ margin:0 auto; width:150px; height:150px; }',
-			'@media (max-width:820px){ .home-wide{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:820px){ .home-wide, .home-two{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -426,7 +448,7 @@ return view.extend({
 		    cvNet = E('canvas', { width: NET_W, height: NET_H }),
 		    cvGrid = E('canvas', { width: NET_W, height: NET_H }),
 		    cvDonut = E('canvas', { class: 'home-cv home-donut', width: 320, height: 320 }),
-		    cvFlash = E('canvas', { class: 'home-cv', width: 900, height: 24, style: 'height:12px' });
+		    cvFlashDonut = E('canvas', { class: 'home-cv home-donut', width: 320, height: 320 });
 
 		refs.netShot = E('div', { class: 'home-shot' }, [ cvNet, cvGrid ]);
 
@@ -434,8 +456,9 @@ return view.extend({
 		refs.cpuSub = E('div', { class: 'home-sub' }, '采样中…');
 		refs.memVal = E('div', { class: 'home-big' }, '—');
 		refs.memSub = E('div', { class: 'home-sub' }, '采样中…');
-		refs.netVal = E('div', { class: 'home-big' }, '—');
-		refs.netSub = E('div', { class: 'home-sub' }, '—');
+		refs.dlVal = E('div', { class: 'home-big' }, '—');
+		refs.ulVal = E('div', { class: 'home-big' }, '—');
+		refs.netSub = E('div', { class: 'home-sub', style: 'margin-top:6px;margin-bottom:0' }, '—');
 		refs.netHead = E('div', { class: 'val' }, '—');
 		refs.upVal = E('div', { class: 'home-big' }, '—');
 		refs.upSub = E('div', { class: 'home-sub' }, '—');
@@ -450,13 +473,20 @@ return view.extend({
 			E('h2', {}, PAGE_TITLE),
 			E('div', { class: 'home-grid' }, [
 				E('div', { class: 'home-card' }, [ E('h4', {}, 'CPU 使用率'), refs.cpuVal, refs.cpuSub, cvCpu ]),
-				E('div', { class: 'home-card' }, [ E('h4', {}, '内存占用'), refs.memVal, refs.memSub, cvMem ]),
-				E('div', { class: 'home-card' }, [ E('h4', {}, '实时网速'), refs.netVal, refs.netSub ]),
+			E('div', { class: 'home-card' }, [ E('h4', {}, '内存使用率'), refs.memVal, refs.memSub, cvMem ]),
+			E('div', { class: 'home-card' }, [
+				E('h4', {}, '实时速率'),
+				E('div', { class: 'home-rate' }, [
+					E('div', {}, [ E('div', { class: 'lb' }, '↓ 下载'), refs.dlVal ]),
+					E('div', {}, [ E('div', { class: 'lb' }, '↑ 上传'), refs.ulVal ])
+				]),
+				refs.netSub
+			]),
 				E('div', { class: 'home-card' }, [ E('h4', {}, '运行时间 / 负载'), refs.upVal, refs.upSub ])
 			]),
 			E('div', { class: 'home-wide' }, [
 				E('div', { class: 'home-card' }, [
-					E('div', { class: 'home-head' }, [ E('h4', {}, '网速'), refs.netHead ]),
+					E('div', { class: 'home-head' }, [ E('h4', {}, '网络速度'), refs.netHead ]),
 					refs.netShot,
 					E('div', { class: 'home-legend center' }, [
 						E('span', {}, [ E('i', { style: 'background:#2f7ef7' }), '下载' ]),
@@ -469,14 +499,19 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-card', style: 'margin-top:12px' }, [
-				E('h4', {}, 'Flash 存储'),
-				refs.flashVal,
-				refs.flashSub,
-				cvFlash,
-				refs.flashLegend
-			]),
-			refs.info
+			E('div', { class: 'home-two' }, [
+				E('div', { class: 'home-card' }, [
+					E('h4', {}, 'Flash 存储'),
+					refs.flashVal,
+					refs.flashSub,
+					cvFlashDonut,
+					refs.flashLegend
+				]),
+				E('div', { class: 'home-card' }, [
+					E('h4', {}, '设备信息'),
+					refs.info
+				])
+			])
 		]);
 
 		var safe = function(p) {
@@ -506,16 +541,18 @@ return view.extend({
 			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
 			    tCpu = shown.cpu.toFixed(1) + ' %',
 			    tMem = memPct.toFixed(1) + ' %',
-			    tDl = '↓ ' + rate(shown.dl * 1024),
-			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : ''),
-			    tCpuSub = cores + ' 核 · 平滑刷新 v3',
+			    tDl = rate(shown.dl * 1024),
+			    tUl = rate(shown.ul * 1024),
+			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v4',
+			    tCpuSub = cores + ' 核 · 平滑刷新 v4',
 			    tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
 			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
 
 			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
 			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
-			if (refs.netVal.textContent !== tDl) refs.netVal.textContent = tDl;
-			if (refs.netSub.textContent !== tUl) refs.netSub.textContent = tUl;
+			if (refs.dlVal.textContent !== tDl) refs.dlVal.textContent = tDl;
+			if (refs.ulVal.textContent !== tUl) refs.ulVal.textContent = tUl;
+			if (refs.netSub.textContent !== tIf) refs.netSub.textContent = tIf;
 			if (refs.cpuSub.textContent !== tCpuSub) refs.cpuSub.textContent = tCpuSub;
 			if (refs.memSub.textContent !== tMemSub) refs.memSub.textContent = tMemSub;
 			if (refs.netHead.textContent !== tHead) refs.netHead.textContent = tHead;
@@ -535,7 +572,9 @@ return view.extend({
 				slow ? safe(fs.read('/proc/loadavg')) : Promise.resolve(null),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/mtd')),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/version')),
-				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/device-tree/model'))
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/device-tree/model')),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/cpuinfo')),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq'))
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -596,17 +635,26 @@ return view.extend({
 				}
 
 				if (!statLoaded && r[5] !== null) {
-					var mtd = parseMtd(r[5]);
+					var mtd = parseMtd(r[5]),
+					    ci = parseCpuInfo(r[8]),
+					    freq = 0;
+
+					if (r[9] && Number(r[9]) > 0)
+						freq = Math.round(Number(r[9]) / 1000);
+					else if (ci.mhz > 0)
+						freq = Math.round(ci.mhz);
+					else if (ci.bogo > 0)
+						freq = Math.round(ci.bogo * 1.5);
 
 					if (mtd.total > 0) {
 						refs.flashVal.textContent = mib(mtd.total);
 						refs.flashSub.textContent = '分区 ' + mtd.parts.length + ' 个（顶层 ' +
 							mtd.parts.filter(function(p) { return !p.nested; }).length + '）';
 
-						var colors = [ '#9aa4b2', '#f0b429', '#7c5cf0', '#2f7ef7' ],
-						    tops = mtd.parts.filter(function(p) { return !p.nested; });
+						var colors = [ '#2f7ef7', '#f0b429', '#7c5cf0', '#10a374', '#e0508b', '#9aa4b2' ],
+							    tops = mtd.parts.filter(function(p) { return !p.nested; });
 
-						drawStack(cvFlash, tops.map(function(p, i) {
+						drawDonut(cvFlashDonut, tops.map(function(p, i) {
 							return { v: p.size, c: colors[i % colors.length] };
 						}));
 
@@ -619,11 +667,20 @@ return view.extend({
 						});
 					}
 
+					var sysType = (ci.system || '').replace(/\s+ver.*$/i, ''),
+					    chip = (sysType.match(/MT\d{4}[A-Za-z]*/) || [ sysType || '未知' ])[0];
+
 					refs.info.textContent = '';
-					[ [ '型号', (r[7] || '').trim() || '未知' ],
-					  [ '内核', parseKernel(r[6]) ],
-					  [ 'CPU 核数', String(cores) ] ].forEach(function(x) {
-						refs.info.appendChild(E('div', {}, [ E('span', {}, x[0]), x[1] ]));
+					[ [ '设备型号', (r[7] || '').trim() || '未知' ],
+						  [ 'CPU 型号', chip ],
+						  [ 'CPU 频率', freq > 0 ? freq + ' MHz' + (r[9] && Number(r[9]) > 0 ? '' : '（估算）') : '未知' ],
+						  [ 'CPU 架构', ci.model || '未知' ],
+						  [ 'CPU 核数', String(cores || 1) ],
+						  [ '内核版本', parseKernel(r[6]) ] ].forEach(function(x) {
+						refs.info.appendChild(E('div', {}, [
+							E('span', {}, x[0]),
+							E('b', {}, x[1])
+						]));
 					});
 
 					statLoaded = true;
