@@ -31,6 +31,23 @@
 #
 # 注意：分区定义在共用文件 mt7620a_hiwifi_hc5x61.dtsi 里（hc5661/hc5761 共用），
 #      所以这里复制一份新的 32M dtsi，只让 hc5761 引用它，不改上游原文件。
+#
+# ---------------------------------------------------------------------------
+# 另外修一个 32MB 专属问题：软重启卡死（灯不亮、Breed 起不来，只能断电恢复）
+#
+# 原因链（kernel 5.15 drivers/mtd/spi-nor）：
+#   1. flash 识别成 w25q256（JEDEC 0xef4019）。这个 ID 对应两种片子：
+#      - W25Q256JV：SFDP 是 JESD216A，内核置 SNOR_F_4B_OPCODES，用 4B 指令码读写，不进模式
+#      - W25Q256FV：没有 4B 指令码，spi_nor_init 会发 0xB7(EN4B) 让整片进入 4 字节地址模式
+#   2. 这个模式是易失状态，只有断电才复位；reboot 时 Breed 用 3 字节命令读，直接读不到
+#   3. 内核本来有退出函数 spi_nor_restore()（shutdown/remove 时调用），但条件是
+#        addr_width==4 && !SNOR_F_4B_OPCODES && SNOR_F_BROKEN_RESET
+#      SNOR_F_BROKEN_RESET 只来自 DTS 的 broken-flash-reset 属性 —— 上游 DTS 没写，所以从不退出
+#   4. Winbond 的退出实现还会补一步“清 EAR=0”：FV 版退出 4B 后扩展地址寄存器残留 1，
+#      会让所有 3 字节读都落到后半片（这本身就是个起不来的坑）
+#
+# 所以补丁就是在 flash@0 节点里加一行 broken-flash-reset;，让 reboot 前自动发 0xE9 + 清 EAR。
+# 不改内核源码，零编译风险；开机 dmesg 会多一条 WARN（enabling reset hack），属正常提示。
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -40,7 +57,7 @@ SRC_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61.dtsi
 DST_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61-32m.dtsi
 IMAGE_MK=target/linux/ramips/image/mt7620.mk
 
-echo "=== [1/4] 检查源码结构 ==="
+echo "=== [1/5] 检查源码结构 ==="
 for f in "$DEV_DTS" "$SRC_DTSI" "$IMAGE_MK"; do
     if [ ! -f "$f" ]; then
         echo "!! 缺少文件：$f"
@@ -49,7 +66,7 @@ for f in "$DEV_DTS" "$SRC_DTSI" "$IMAGE_MK"; do
     fi
 done
 
-echo "=== [2/4] 复制分区定义并改成 32MB 布局 ==="
+echo "=== [2/5] 复制分区定义并改成 32MB 布局 ==="
 cp "$SRC_DTSI" "$DST_DTSI"
 
 python3 - "$DST_DTSI" <<'PY'
@@ -124,9 +141,30 @@ for p in sorted(drop, key=lambda b: b['start'], reverse=True):
     print('    删除 OEM 分区：%-8s 0x%08x (%dK)' % (p['label'], p['off'] or 0, (p['size'] or 0) // 1024))
     del lines[p['start']:p['end'] + 1]
 
+# 3) 给 flash@0 节点加 broken-flash-reset
+#    让内核在 shutdown/reboot 时走 spi_nor_restore()：发 0xE9 退出 4 字节地址模式 + 清 EAR。
+#    没有这个属性，W25Q256FV 这类片子会一直停在 4B 模式，软重启后 Breed 读不到 flash。
+joined = ''.join(lines)
+if 'broken-flash-reset' in joined:
+    print('    broken-flash-reset 已存在，跳过')
+else:
+    idx = None
+    for k, ln in enumerate(lines):
+        if re.search(r'flash@0\s*\{', ln):
+            for j in range(k + 1, min(k + 8, len(lines))):
+                if 'jedec,spi-nor' in lines[j]:
+                    idx = j
+                    break
+            break
+    if idx is None:
+        sys.exit('!! 找不到 flash@0 / jedec,spi-nor 节点，无法加 broken-flash-reset，终止')
+    indent = re.match(r'^(\s*)', lines[idx]).group(1)
+    lines.insert(idx + 1, '%sbroken-flash-reset;\n' % indent)
+    print('    已插入 broken-flash-reset;（修复软重启卡死）')
+
 new_text = ''.join(lines)
 
-# 3) 校验：不重叠 + 正好铺满 32MB + firmware 尺寸正确
+# 4) 校验：不重叠 + 正好铺满 32MB + firmware 尺寸正确
 new_parts = parse(new_text.splitlines(keepends=True))
 print('    32MB 分区表：')
 prev = 0
@@ -149,7 +187,7 @@ path.write_text(new_text, encoding='utf-8')
 print('    32M 分区定义写入成功：%s' % path.name)
 PY
 
-echo "=== [3/4] 让 HC5761 引用 32M 分区定义 ==="
+echo "=== [3/5] 让 HC5761 引用 32M 分区定义 ==="
 python3 - "$DEV_DTS" "$DST_DTSI" <<'PY'
 import sys
 import pathlib
@@ -164,7 +202,7 @@ dev.write_text(text.replace(old, '#include "%s"' % new_name), encoding='utf-8')
 print('    %s -> #include "%s"' % (old, new_name))
 PY
 
-echo "=== [4/4] 修改 mt7620.mk 的 IMAGE_SIZE ==="
+echo "=== [4/5] 修改 mt7620.mk 的 IMAGE_SIZE ==="
 python3 - "$IMAGE_MK" <<'PY'
 import re
 import sys
@@ -193,6 +231,17 @@ mk.write_text(text[:m.start()] + new_block + text[m.end():], encoding='utf-8')
 print('    IMAGE_SIZE: %s  ->  IMAGE_SIZE := %dk' % (old.group(0), IMAGE_SIZE_K))
 PY
 
+echo "=== [5/5] 回读校验（任何一项不对直接失败，不浪费编译时间）==="
+DST_NAME=$(basename "$DST_DTSI")
+
+grep -q 'broken-flash-reset;' "$DST_DTSI" \
+    || { echo "!! 32M dtsi 里没有 broken-flash-reset（软重启会卡死）"; exit 1; }
+grep -q 'reg = <0x50000 0x1fb0000>;' "$DST_DTSI" \
+    || { echo "!! firmware 分区 reg 不是 0x50000 + 0x1fb0000"; exit 1; }
+grep -q "#include \"$DST_NAME\"" "$DEV_DTS" \
+    || { echo "!! hc5761.dts 没有引用 $DST_NAME"; exit 1; }
+sed -n '/define Device\/hiwifi_hc5761/,/endef/p' "$IMAGE_MK" | grep -q 'IMAGE_SIZE := 32448k' \
+    || { echo "!! mt7620.mk 里 hc5761 的 IMAGE_SIZE 不是 32448k"; exit 1; }
+
 echo "=== 32M 补丁全部完成 ==="
-grep -E 'IMAGE_SIZE|DEVICE_MODEL' "$IMAGE_MK" | sed -n '1,40p' >/dev/null 2>&1 || true
-echo "补丁完成，firmware 分区 = 0x50000 ~ 0x2000000，IMAGE_SIZE = 32448k"
+echo "firmware 分区 = 0x50000 ~ 0x2000000，IMAGE_SIZE = 32448k，broken-flash-reset 已写入"

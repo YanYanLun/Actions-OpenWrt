@@ -97,6 +97,8 @@ jobs:
         sed -n '/define Device\/hiwifi_hc5761/,/endef/p' target/linux/ramips/image/mt7620.mk | grep -E 'IMAGE_SIZE|DEVICE_MODEL'
         echo "--- 32M 分区表 ---"
         cat target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-32m.dtsi
+        echo "--- 软重启修复（broken-flash-reset 必须恰好 1 处）---"
+        test "$(grep -c 'broken-flash-reset;' target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-32m.dtsi)" -eq 1
         echo "--- HC5761 dts 引用 ---"
         grep -n '#include' target/linux/ramips/dts/mt7620a_hiwifi_hc5761.dts
 
