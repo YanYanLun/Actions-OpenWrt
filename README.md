@@ -6,7 +6,7 @@ HiWiFi HC5761（极路由 3）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 
 ## 目录
 
-一、改了什么 ｜ 二、分区表 ｜ 三、触发编译 ｜ 四、Breed 刷写 ｜ 五、刷完验收 ｜ 六、后续怎么改 ｜ 七、扩容还要动什么（32MB/64MB） ｜ 八、LuCI 换皮 Argon ｜ 九、软重启卡死修复 ｜ 十、服务插件与主题 ｜ 十一、Flash 信息页 ｜ 十二、来源与致谢
+一、改了什么 ｜ 二、分区表 ｜ 三、触发编译 ｜ 四、Breed 刷写 ｜ 五、刷完验收 ｜ 六、后续怎么改 ｜ 七、扩容还要动什么（32MB/64MB） ｜ 八、LuCI 换皮 Argon ｜ 九、软重启卡死修复 ｜ 十、服务插件与主题 ｜ 十一、Flash 信息页 ｜ 十二、图形化仪表盘 ｜ 十三、来源与致谢
 
 ---
 
@@ -20,6 +20,7 @@ HiWiFi HC5761（极路由 3）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 | `files/etc/uci-defaults/99-luci-theme` | 开机把默认主题设成 Argon（iStoreOS 同款），没有则退回 material / bootstrap |
 | `files/etc/uci-defaults/99-argon-look` | 开机把 Argon 主色设为 `#2f7ef7`、登录页背景设为纯色（不拉 Bing 图） |
 | `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 32MB 总容量与 mtd 分区表 |
+| `files/www/luci-static/resources/view/dash.js` 等 3 个文件 | 自建「状态 → 仪表盘」页：CPU/内存/网速实时曲线、内存环形图、Flash 堆叠条，零依赖零安装 |
 | `diy-part1.sh` | helloworld（passwall 等）第三方源默认注释掉，减少首次编译失败点 |
 | `.gitattributes` | 强制 `.sh` / `.yml` / `.config` 用 LF，避免 Windows 下 CRLF 让 bash 报 `bad interpreter` |
 
@@ -552,7 +553,101 @@ ls -l /usr/share/rpcd/acl.d/luci-app-flashinfo.json
 如果页面能打开但提示无法读取，说明 acl 没生效（rpcd 重启即可）；页面本身不会影响开机和上网。
 ---
 
-## 十二、来源与致谢
+## 十二、图形化仪表盘（自建「仪表盘」页，零依赖）
+
+### 12.1 先划清边界：哪些能改、哪些改不了
+
+- **改不了**：LuCI 每个功能页的排版是各 app 自带的 JS/CBI 表单自动生成的（字段顺序、分组、按钮位置都在包里写死），主题只能统一配色、字体、圆角、间距，**没法逐页重排**。想要「所有页面布局都重新设计」等于改几十个 app 的源码，不现实也没必要。
+- **能改的只有三层**：① 主题层（Argon 的 CSS 与配色，已生效）② 自建页面（想怎么排就怎么排）③ 装带图表的插件。
+- 所以本次交付 = 主题维持 Argon（iStoreOS 同款）+ **新增一个图形化仪表盘页**，把「信息显示更合理、图表直观」这件事落到能看得见的地方。
+
+### 12.2 新页面：状态 → 仪表盘
+
+菜单 `admin/status/dash`，order 5，排在「概览」前面；访问 `/cgi-bin/luci/` 时大概率直接落到这一页（若不是，地址栏直接输 `/admin/status/dash`）。
+
+上面 4 张指标卡：
+
+| 卡片 | 显示内容 |
+|---|---|
+| CPU 使用率 | 实时百分比 + 60 次采样折线（每 4 秒一点），副标题显示核数与采样方式 |
+| 内存占用 | 百分比 + 折线，副标题 `已用 / 总量`（如 57.6 MiB / 116.4 MiB） |
+| 实时网速 | `↓ 1.00 MB/s  ↑ 256.0 KB/s`（B/s→KB/s→MB/s 自动换算），副标题显示统计接口名 |
+| 运行时间 / 负载 | `3 小时 25 分` + `负载 0.99 / 1.73 / 0.87` |
+
+下面 3 块图：
+
+| 图 | 说明 |
+|---|---|
+| 近 60 次采样网速曲线 | 双线：蓝=下行、绿=上行，y 轴按当前峰值自适应，避免小流量被压成一条直线 |
+| 内存构成环形图 | 已用（蓝）/ 缓存（黄）/ 可用（灰），下方带图例与数值 |
+| Flash 存储 | 大数字 `32.00 MiB` + 堆叠条（u-boot / hw_panic / factory / firmware）+ 图例带各自容量 |
+
+底部信息条：型号（读 `/proc/device-tree/model`）、内核版本（读 `/proc/version`）、CPU 核数。
+
+刷新策略：每 4 秒一次；`/proc/mtd`、`/proc/version`、`/proc/device-tree/model` 这三个静态数据**只读一次**，其余每轮读，避免在 580MHz 上频繁打扰 rpcd。
+
+### 12.3 三个文件（随 files/ 打包，不装包、不占额外 flash）
+
+| 文件 | 作用 |
+|---|---|
+| `files/www/luci-static/resources/view/dash.js` | 页面本体：解析 /proc、画 canvas、4 秒轮询 |
+| `files/usr/share/luci/menu.d/luci-app-dash.json` | 菜单项：`admin/status/dash`、标题「仪表盘」、order 5 |
+| `files/usr/share/rpcd/acl.d/luci-app-dash.json` | 放行 8 个 /proc 文件的 read |
+
+数据全部来自 `/proc`（`stat`、`meminfo`、`net/dev`、`uptime`、`loadavg`、`mtd`、`version`、`device-tree/model`），不需要 ubus、不需要装 collectd，也不占额外 flash（页面本身 14KB，直接躺在只读分区里）。
+
+### 12.4 为什么不用现成插件
+
+- `luci-mod-dashboard`：官方大盘，但只有「路由器 / LAN / WiFi」三张卡片，**一张图表都没有**。
+- `luci-app-statistics`（collectd + rrdtool）：能给真正的历史曲线，代价约 +2MB flash、常驻 collectd 进程、每 5 分钟 rrd 落盘；580MHz/128MB 上属于「能用但吃紧」。
+- 自建页的优点：零成本、能显示 Flash 分区布局（统计插件看不到 mtd 顶层分区）。
+
+想要历史曲线（比如 24 小时流量）再上 statistics，在 `.config` 加这几行重编一次即可（默认没启用，避免白占 2MB）：
+
+```
+CONFIG_PACKAGE_luci-app-statistics=y
+CONFIG_PACKAGE_collectd-mod-cpu=y
+CONFIG_PACKAGE_collectd-mod-memory=y
+CONFIG_PACKAGE_collectd-mod-interface=y
+CONFIG_PACKAGE_collectd-mod-load=y
+CONFIG_PACKAGE_rrdtool1=y
+```
+
+### 12.5 本地已验证（不是「写完就交」）
+
+- `node --check` 语法通过；
+- 用真实格式的 `/proc` 样本喂进去跑：CPU 71.9%、内存 57.6 MiB / 116.4 MiB、下行 1.00 MB/s、上行 256.0 KB/s、Flash 32.00 MiB、7 个分区（顶层 4）；
+- 结构树 6 个顶层节点、5 个 canvas 全部产生绘制调用（clearRect / stroke / fill / arc / fillRect），无 unhandled rejection。
+
+### 12.6 设备端更新（免重编，1 分钟生效）
+
+```sh
+cd /tmp
+B=https://raw.githubusercontent.com/YanYanLun/Actions-OpenWrt/hc5761-openwrt-23.05/files
+wget -q -O /www/luci-static/resources/view/dash.js $B/www/luci-static/resources/view/dash.js
+wget -q -O /usr/share/luci/menu.d/luci-app-dash.json $B/usr/share/luci/menu.d/luci-app-dash.json
+wget -q -O /usr/share/rpcd/acl.d/luci-app-dash.json $B/usr/share/rpcd/acl.d/luci-app-dash.json
+/etc/init.d/rpcd restart
+/etc/init.d/uhttpd restart
+```
+
+然后刷新网页 → 状态 → 仪表盘。三个文件都走 overlay copy-up，不用重启路由器；`sysupgrade` 后回到镜像自带版本（镜像里已经是同一份）。
+
+### 12.7 想更接近 iStoreOS 的「扁平干净」
+
+Argon 默认侧边栏带 30% 透明 + 毛玻璃残留，想要 iStoreOS 那种纯色扁平感，SSH 跑这两条（立即生效，不用重编）：
+
+```sh
+uci set argon.@global[0].transparency='0'
+uci set argon.@global[0].blur='0'
+uci commit argon
+/etc/init.d/uhttpd restart
+```
+
+主色已是 `#2f7ef7`（iStoreOS 同款蓝），登录页背景已设为纯色不拉 Bing 图。
+
+---
+## 十三、来源与致谢
 
 - 本仓库 fork 自 [P3TERX/Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt) 模板（MIT License © P3TERX），工作流骨架、ccache 与 release 上传逻辑沿用该模板。
 - 源码：[immortalwrt/immortalwrt](https://github.com/immortalwrt/immortalwrt) `openwrt-23.05` 分支；LuCI 与 packages 均为 ImmortalWrt 官方 feed。

@@ -1,0 +1,13 @@
+{
+	"admin/status/dash": {
+		"title": "仪表盘",
+		"order": 5,
+		"action": {
+			"type": "view",
+			"path": "dash"
+		},
+		"depends": {
+			"acl": [ "luci-app-dash" ]
+		}
+	}
+}

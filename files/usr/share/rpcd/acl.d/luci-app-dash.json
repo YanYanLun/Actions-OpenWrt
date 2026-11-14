@@ -1,0 +1,17 @@
+{
+	"luci-app-dash": {
+		"description": "仪表盘：读取 /proc 统计数据",
+		"read": {
+			"file": {
+				"/proc/stat": [ "read" ],
+				"/proc/meminfo": [ "read" ],
+				"/proc/net/dev": [ "read" ],
+				"/proc/uptime": [ "read" ],
+				"/proc/loadavg": [ "read" ],
+				"/proc/mtd": [ "read" ],
+				"/proc/version": [ "read" ],
+				"/proc/device-tree/model": [ "read" ]
+			}
+		}
+	}
+}
