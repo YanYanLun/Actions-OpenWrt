@@ -1,6 +1,12 @@
 # HC5761 换 32MB Flash —— ImmortalWrt 自编译（GitHub Actions）
 
-本文档对应本仓库已改好的 4 个文件，走完就是一次可刷的 32M 固件。
+HiWiFi HC5761（极路由 3）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub Actions 自编译 ImmortalWrt 23.05 的完整流程：分区补丁、编译触发、Breed 刷写、验收命令、软重启修复、LuCI 主题与插件，全部已验证。
+
+**结论先行**：本仓库的 Actions 直接 Run 一次即可产出可刷的 `sysupgrade.bin`（同尺寸 32M → 32M 可直接网页升级，跨尺寸必须进 Breed）。
+
+## 目录
+
+一、改了什么 ｜ 二、分区表 ｜ 三、触发编译 ｜ 四、Breed 刷写 ｜ 五、刷完验收 ｜ 六、后续怎么改 ｜ 七、扩容还要动什么（32MB/64MB） ｜ 八、LuCI 换皮 Argon ｜ 九、软重启卡死修复 ｜ 十、服务插件与主题 ｜ 十一、Flash 信息页 ｜ 十二、来源与致谢
 
 ---
 
@@ -10,7 +16,10 @@
 | --- | --- |
 | `.github/workflows/openwrt-builder.yml` | 源码从 `coolsnowwolf/lede` 换成 `immortalwrt/immortalwrt` + `openwrt-23.05`；加 ccache 缓存、加"32M 补丁自检"步骤、加超时保护 |
 | `diy-part2.sh` | 新增 32M 分区补丁（生成 32M dtsi、改写 HC5761 的 include、改 `mt7620.mk` 的 `IMAGE_SIZE`），改完自带校验，出错直接终止编译 |
-| `.config` | 从空占位换成最小可用骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储），其余由 `make defconfig` 补全 |
+| `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 5 个服务插件（ddns/wol/upnp/vlmcsd/xlnetacc），其余由 `make defconfig` 补全 |
+| `files/etc/uci-defaults/99-luci-theme` | 开机把默认主题设成 Argon（iStoreOS 同款），没有则退回 material / bootstrap |
+| `files/etc/uci-defaults/99-argon-look` | 开机把 Argon 主色设为 `#2f7ef7`、登录页背景设为纯色（不拉 Bing 图） |
+| `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 32MB 总容量与 mtd 分区表 |
 | `diy-part1.sh` | helloworld（passwall 等）第三方源默认注释掉，减少首次编译失败点 |
 | `.gitattributes` | 强制 `.sh` / `.yml` / `.config` 用 LF，避免 Windows 下 CRLF 让 bash 报 `bad interpreter` |
 
