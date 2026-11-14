@@ -1,0 +1,17 @@
+#!/bin/sh
+# Argon 主题的“干净蓝白”预设（iStoreOS 那种观感）：
+#   primary='#2f7ef7'            主色，默认 #5e72e4 偏紫，换成干净的正蓝
+#   online_wallpaper='none'      登录页不拉 Bing 风景图，纯色，加载更快
+# 其余项（深色模式、模糊、透明度、自定义背景图）在 系统 -> Argon 主题设置 里改。
+
+[ -f /etc/config/argon ] || exit 0
+
+uci -q get argon.@global[0] >/dev/null 2>&1 || exit 0
+
+uci -q batch <<-EOF
+	set argon.@global[0].primary='#2f7ef7'
+	set argon.@global[0].online_wallpaper='none'
+	commit argon
+EOF
+
+exit 0
