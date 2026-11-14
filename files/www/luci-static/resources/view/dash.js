@@ -5,14 +5,17 @@
 
 var NESTED = /^(kernel|rootfs|rootfs_data)$/;
 var HIST = 60;
-var POLL_MS = 1000;      /* 采样间隔：1 秒 */
+var POLL_MS = 1000;      /* 采样间隔 */
 var TEXT_MS = 33;        /* 数字 30fps */
-var DRAW_MS = 33;        /* 曲线 30fps，只做面积填充，不再重画坐标轴 */
-var PAGE_TITLE = '仪表盘';
+var DRAW_MS = 33;        /* 曲线 30fps */
+var GRID_MS = 250;       /* 坐标轴层 4fps：刻度跟着曲线一起滑，几乎不耗 */
+var TAU_MS = 300;        /* 数值跟随时间常数：永不定格，连续逼近 */
 
 var NET_W = 640, NET_H = 184;
 var MINI_W = 320, MINI_H = 72;
 var PAD = { l: 46, r: 10, t: 8, b: 18 };
+
+var PAGE_TITLE = '仪表盘';
 
 function parseCpu(txt) {
 	var m = (txt || '').match(/(?:^|\n)cpu\s+([^\n]+)/);
@@ -23,7 +26,6 @@ function parseCpu(txt) {
 	var v = m[1].trim().split(/\s+/).map(Number);
 
 	return {
-		idle: (v[3] || 0) + (v[4] || 0),
 		busy: (v[0] || 0) + (v[1] || 0) + (v[2] || 0) + (v[5] || 0) + (v[6] || 0) + (v[7] || 0),
 		total: (v[3] || 0) + (v[4] || 0) + (v[0] || 0) + (v[1] || 0) + (v[2] || 0) + (v[5] || 0) + (v[6] || 0) + (v[7] || 0)
 	};
@@ -33,13 +35,12 @@ function cpuPercent(prev, cur) {
 	if (!prev || !cur)
 		return null;
 
-	var dt = cur.total - prev.total,
-	    db = cur.busy - prev.busy;
+	var dt = cur.total - prev.total;
 
 	if (dt <= 0)
 		return null;
 
-	return Math.max(0, Math.min(100, db * 100 / dt));
+	return Math.max(0, Math.min(100, (cur.busy - prev.busy) * 100 / dt));
 }
 
 function parseMem(txt) {
@@ -196,20 +197,39 @@ function smoothPath(ctx, pts) {
 	ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 
-/* 只画面积+描边+末端圆点：这是每帧都要跑的路径，越轻越好 */
-function drawSeries(ctx, rect, series, style, max, frac) {
-	if (!series || series.length < 2)
+/*
+ * 时间轴绘制：每个点的横坐标由「当前时刻 - 采样时刻」直接算出，
+ * 所以曲线每秒固定左移一格，与采样请求早到晚到完全无关，永不冻结、永不跳格。
+ */
+function drawSeries(ctx, rect, series, style, max, now, tip) {
+	if (!series || !series.length)
 		return;
 
 	if (max <= 0) max = 1;
 
-	var n = series.length,
-	    step = rect.w / (HIST - 1),
-	    off = (frac || 0) * step,
-	    pts = series.map(function(v, i) {
-	    	return [ rect.x + rect.w - (n - 1 - i) * step - off,
-	    	        rect.y + rect.h - (Math.min(v, max) / max) * (rect.h - 6) - 3 ];
-	    });
+	var step = rect.w / (HIST - 1),
+	    sp = step / POLL_MS,
+	    pts = [],
+	    i, x, v;
+
+	for (i = 0; i < series.length; i++) {
+		x = rect.x + rect.w - (now - series[i].t) * sp;
+
+		if (x < rect.x - step * 2)
+			continue;
+
+		v = (i === series.length - 1 && tip !== undefined) ? tip : series[i].v;
+
+		pts.push([ x, rect.y + rect.h - (Math.min(Math.max(v, 0), max) / max) * (rect.h - 6) - 3 ]);
+	}
+
+	if (!pts.length)
+		return;
+
+	pts[0][0] = Math.max(pts[0][0], rect.x);
+
+	/* 右端按最新值平推补满：下一次采样还没到时也不留缺口，来数据后无跳变 */
+	pts.push([ rect.x + rect.w, pts[pts.length - 1][1] ]);
 
 	var g = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
 
@@ -218,36 +238,36 @@ function drawSeries(ctx, rect, series, style, max, frac) {
 
 	ctx.beginPath();
 	smoothPath(ctx, pts);
-	ctx.lineTo(rect.x + rect.w, pts[n - 1][1]);
 	ctx.lineTo(rect.x + rect.w, rect.y + rect.h);
-	ctx.lineTo(Math.max(pts[0][0], rect.x), rect.y + rect.h);
-	ctx.lineTo(Math.max(pts[0][0], rect.x), pts[0][1]);
+	ctx.lineTo(pts[0][0], rect.y + rect.h);
+	ctx.lineTo(pts[0][0], pts[0][1]);
 	ctx.closePath();
 	ctx.fillStyle = g;
 	ctx.fill();
 
 	ctx.beginPath();
 	smoothPath(ctx, pts);
-	ctx.lineTo(rect.x + rect.w, pts[n - 1][1]);
 	ctx.strokeStyle = style.stroke;
 	ctx.lineWidth = 1.6;
 	ctx.stroke();
 }
 
-function drawMini(cv, series, style, max, frac) {
+function drawMini(cv, series, style, max, now, tip) {
 	var ctx = cv.getContext('2d');
 
 	ctx.clearRect(0, 0, cv.width, cv.height);
-	drawSeries(ctx, { x: 1, y: 4, w: cv.width - 2, h: cv.height - 8 }, series, style, max, frac);
+	drawSeries(ctx, { x: 1, y: 4, w: cv.width - 2, h: cv.height - 8 }, series, style, max, now, tip);
 }
 
-/* 静态层：网格线 + 纵轴刻度 + 时间刻度。每秒只画一次 */
-function drawNetGrid(cv, max, now, samples) {
+/* 坐标轴层：网格 + 纵轴刻度 + 时间刻度，4fps 重画，跟着曲线一起左滑 */
+function drawNetGrid(cv, max, now, series) {
 	var ctx = cv.getContext('2d'),
 	    W = cv.width,
 	    H = cv.height,
 	    rect = { x: PAD.l, y: PAD.t, w: W - PAD.l - PAD.r, h: H - PAD.t - PAD.b },
-	    i, y, v, k, n, step, x;
+	    step = rect.w / (HIST - 1),
+	    sp = step / POLL_MS,
+	    i, y, v, x, t;
 
 	ctx.clearRect(0, 0, W, H);
 
@@ -272,33 +292,30 @@ function drawNetGrid(cv, max, now, samples) {
 
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'top';
-	ctx.fillStyle = 'rgba(0,0,0,.45)';
 
-	n = samples || 0;
-	step = rect.w / (HIST - 1);
+	if (!series || !series.length)
+		return;
 
-	for (k = 0; k < n; k += 15) {
-		x = rect.x + rect.w - (n - 1 - k) * step;
+	for (i = series.length - 1; i >= 0; i -= 15) {
+		t = series[i].w;
+		x = rect.x + rect.w - (now - series[i].t) * sp;
 
-		if (x < rect.x + 16 || x > rect.x + rect.w - 16)
+		if (x < rect.x + 14 || x > rect.x + rect.w - 14)
 			continue;
 
-		ctx.fillText(clockText(now - (n - 1 - k) * POLL_MS), x, rect.y + rect.h + 6);
+		ctx.fillText(clockText(t), x, rect.y + rect.h + 6);
 	}
 }
 
-/* 动画层：只有两条面积曲线，背景透明，每帧重画 */
-function drawNetCurve(cv, rx, tx, max, frac) {
+/* 动画层：只有两条面积曲线，背景透明 */
+function drawNetCurve(cv, rx, tx, max, now, dl, ul) {
 	var ctx = cv.getContext('2d'),
 	    rect = { x: PAD.l, y: PAD.t, w: cv.width - PAD.l - PAD.r, h: cv.height - PAD.t - PAD.b };
 
 	ctx.clearRect(0, 0, cv.width, cv.height);
 
-	if (rx.length >= 2)
-		drawSeries(ctx, rect, rx, { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' }, max, frac);
-
-	if (tx.length >= 2)
-		drawSeries(ctx, rect, tx, { stroke: '#10a374', fillTop: 'rgba(16,163,116,.24)', fillBottom: 'rgba(16,163,116,.02)' }, max, frac);
+	drawSeries(ctx, rect, rx, { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' }, max, now, dl);
+	drawSeries(ctx, rect, tx, { stroke: '#10a374', fillTop: 'rgba(16,163,116,.22)', fillBottom: 'rgba(16,163,116,.02)' }, max, now, ul);
 }
 
 function drawDonut(cv, segs) {
@@ -320,7 +337,7 @@ function drawDonut(cv, segs) {
 	    a0 = -Math.PI / 2;
 
 	segs.forEach(function(s) {
-	var a1 = a0 + s.v / total * Math.PI * 2;
+		var a1 = a0 + s.v / total * Math.PI * 2;
 
 		ctx.beginPath();
 		ctx.arc(cx, cy, r, a0, Math.max(a1, a0 + 0.0001));
@@ -370,17 +387,15 @@ return view.extend({
 
 	render: function() {
 		var cpuHist = [], memHist = [], rxHist = [], txHist = [],
-		    prevCpu = null, prevNet = null, prevT = null,
-		    statLoaded = false, last = {}, refs = {},
+		    prevCpu = null, prevNet = null, prevT = 0,
+		    statLoaded = false, slowTick = 0, last = {}, refs = {},
 		    KEYS = [ 'cpu', 'memUsed', 'memCache', 'memFree', 'memTotal', 'dl', 'ul' ],
-		    from = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    target = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    shown = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
-		    segT = 0,
 		    emaCpu = null, emaDl = null, emaUl = null,
-		    netMax = 0,
-		    started = 0, lastTs = 0, lastPoll = 0, lastDraw = 0, lastText = 0,
-		    pollId = 0, stopped = false, donutKey = '', gridKey = '';
+		    netMax = 0, netName = '', cores = 0,
+		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
+		    pollId = 0, stopped = false, donutKey = '';
 
 		var css = [
 			'.home{ font-size:13px; }',
@@ -468,9 +483,11 @@ return view.extend({
 			return p.catch(function() { return ''; });
 		};
 
-		var push = function(arr, v) {
-			arr.push(v);
-			while (arr.length > HIST) arr.shift();
+		var push = function(arr, v, t, wall) {
+			arr.push({ t: t, v: v, w: wall });
+
+			while (arr.length > HIST)
+				arr.shift();
 		};
 
 		var frame = function(fn) {
@@ -478,31 +495,27 @@ return view.extend({
 			else setTimeout(function() { fn(Date.now()); }, 16);
 		};
 
-		var nowMs = function() {
+		var clock = function() {
 			return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 		};
 
 		var BLUE = { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' },
 		    PURPLE = { stroke: '#7c5cf0', fillTop: 'rgba(124,92,240,.28)', fillBottom: 'rgba(124,92,240,.02)' };
 
-		var netName = '', cores = 0;
-
 		var paintText = function() {
 			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
 			    tCpu = shown.cpu.toFixed(1) + ' %',
 			    tMem = memPct.toFixed(1) + ' %',
 			    tDl = '↓ ' + rate(shown.dl * 1024),
-			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : '');
+			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : ''),
+			    tCpuSub = cores + ' 核 · 平滑刷新 v3',
+			    tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
+			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
 
 			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
 			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
 			if (refs.netVal.textContent !== tDl) refs.netVal.textContent = tDl;
 			if (refs.netSub.textContent !== tUl) refs.netSub.textContent = tUl;
-
-			var tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
-			    tCpuSub = cores + ' 核 · 平滑刷新',
-			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
-
 			if (refs.cpuSub.textContent !== tCpuSub) refs.cpuSub.textContent = tCpuSub;
 			if (refs.memSub.textContent !== tMemSub) refs.memSub.textContent = tMemSub;
 			if (refs.netHead.textContent !== tHead) refs.netHead.textContent = tHead;
@@ -510,33 +523,27 @@ return view.extend({
 
 		paintText();
 
-		/* 采样：只更新端点 + 每秒重画一次坐标轴层 */
 		var poll = function() {
-			var t = nowMs();
+			var t = clock(),
+			    slow = (slowTick++ % 5) === 0;
 
 			Promise.all([
 				safe(fs.read('/proc/stat')),
 				safe(fs.read('/proc/meminfo')),
 				safe(fs.read('/proc/net/dev')),
-				safe(fs.read('/proc/uptime')),
-				safe(fs.read('/proc/loadavg')),
-				statLoaded ? Promise.resolve(last.mtd) : safe(fs.read('/proc/mtd')),
-				statLoaded ? Promise.resolve(last.ver) : safe(fs.read('/proc/version')),
-				statLoaded ? Promise.resolve(last.model) : safe(fs.read('/proc/device-tree/model'))
+				slow ? safe(fs.read('/proc/uptime')) : Promise.resolve(null),
+				slow ? safe(fs.read('/proc/loadavg')) : Promise.resolve(null),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/mtd')),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/version')),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/device-tree/model'))
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
-				    pct = cpuPercent(prevCpu, cpu),
-				    i;
-
-				/* 冻结当前显示位置作为本段起点，再瞄准新值，整秒滑过去 */
-				for (i = 0; i < KEYS.length; i++)
-					from[KEYS[i]] = shown[KEYS[i]];
+				    pct = cpuPercent(prevCpu, cpu);
 
 				if (pct !== null) {
 					emaCpu = (emaCpu === null) ? pct : (emaCpu * 0.45 + pct * 0.55);
-
 					target.cpu = emaCpu;
-					push(cpuHist, emaCpu);
+					push(cpuHist, emaCpu, t, Date.now());
 				}
 
 				prevCpu = cpu;
@@ -549,7 +556,7 @@ return view.extend({
 					target.memCache = mem.cache;
 					target.memFree = mem.free;
 					target.memTotal = mem.total;
-					push(memHist, mem.used / mem.total * 100);
+					push(memHist, mem.used / mem.total * 100, t, Date.now());
 				}
 
 				var net = parseNet(r[2]);
@@ -561,14 +568,13 @@ return view.extend({
 						var dl = Math.max(0, (net.rx - prevNet.rx) / dt) / 1024,
 						    ul = Math.max(0, (net.tx - prevNet.tx) / dt) / 1024;
 
-						/* 轻量 EMA，压掉单次采样的毛刺，曲线才顺 */
 						emaDl = (emaDl === null) ? dl : (emaDl * 0.45 + dl * 0.55);
 						emaUl = (emaUl === null) ? ul : (emaUl * 0.45 + ul * 0.55);
 
 						target.dl = emaDl;
 						target.ul = emaUl;
-						push(rxHist, emaDl);
-						push(txHist, emaUl);
+						push(rxHist, emaDl, t, Date.now());
+						push(txHist, emaUl, t, Date.now());
 						netName = net.name;
 					}
 				}
@@ -576,33 +582,20 @@ return view.extend({
 				prevNet = net;
 				prevT = t;
 
-				lastPoll = nowMs();
-				segT = lastPoll;
-
-				refs.upVal.textContent = uptimeText(parseUptime(r[3]));
-				refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
-					return x.toFixed(2);
-				}).join(' / ');
-
-				/* 量程每秒只在采样点更新一次，秒内保持不变，避免坐标轴来回跳 */
-				if (rxHist.length >= 2) {
-					var top = Math.max.apply(null, rxHist.concat(txHist).concat([ 10 ])) * 1.06;
-
-					netMax = netMax ? Math.max(top, netMax * 0.72) : top;
-
-					var gk = Math.round(netMax * 20) + ':' + rxHist.length + ':' + Math.floor(Date.now() / 1000);
-
-					if (gridKey !== gk) {
-						gridKey = gk;
-						drawNetGrid(cvGrid, netMax, Date.now(), rxHist.length);
-					}
+				if (slow) {
+					refs.upVal.textContent = uptimeText(parseUptime(r[3]));
+					refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
+						return x.toFixed(2);
+					}).join(' / ');
 				}
 
-				if (!statLoaded) {
-					last.mtd = r[5];
-					last.ver = r[6];
-					last.model = r[7];
+				if (rxHist.length) {
+					var top = Math.max.apply(null, rxHist.concat(txHist).map(function(p) { return p.v; }).concat([ 10 ])) * 1.06;
 
+					netMax = netMax ? Math.max(top, netMax * 0.72) : top;
+				}
+
+				if (!statLoaded && r[5] !== null) {
 					var mtd = parseMtd(r[5]);
 
 					if (mtd.total > 0) {
@@ -640,23 +633,19 @@ return view.extend({
 			});
 		};
 
-		/* 每帧：只画两条面积曲线（CPU/内存迷你图 + 网速） */
 		var paintCharts = function(ts) {
-			var frac = lastPoll ? Math.max(0, Math.min(1, (ts - lastPoll) / POLL_MS)) : 0;
+			drawMini(cvCpu, cpuHist, BLUE, 100, ts, shown.cpu);
 
-			if (cpuHist.length >= 2)
-				drawMini(cvCpu, cpuHist.slice(0, -1).concat([ shown.cpu ]), BLUE, 100, frac);
+			drawMini(cvMem, memHist, PURPLE, 100, ts,
+				shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0);
 
-			if (memHist.length >= 2)
-				drawMini(cvMem, memHist.slice(0, -1).concat([
-					shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0
-				]), PURPLE, 100, frac);
+			drawNetCurve(cvNet, rxHist, txHist, netMax || 10, ts, shown.dl, shown.ul);
 
-			if (rxHist.length >= 2)
-				drawNetCurve(cvNet, rxHist.slice(0, -1).concat([ shown.dl ]),
-				             txHist.slice(0, -1).concat([ shown.ul ]), netMax || 10, frac);
+			if (ts - lastGrid >= GRID_MS) {
+				lastGrid = ts;
+				drawNetGrid(cvGrid, netMax || 10, ts, rxHist);
+			}
 
-			/* 饼图按 0.5% 量化去重：数值稳定时不重复重绘，省这颗 CPU */
 			var dk = Math.round(shown.memUsed / (shown.memTotal || 1) * 200) + ':' +
 			         Math.round(shown.memCache / (shown.memTotal || 1) * 200) + ':' +
 			         Math.round(shown.memFree / (shown.memTotal || 1) * 200);
@@ -669,10 +658,7 @@ return view.extend({
 					{ v: shown.memCache, c: '#f0b429' },
 					{ v: shown.memFree, c: 'rgba(128,128,128,.35)' }
 				]);
-			}
 
-			if (refs.donutLegend._k !== dk) {
-				refs.donutLegend._k = dk;
 				refs.donutLegend.textContent = '';
 				[ [ '已用 ' + bytes(shown.memUsed), '#2f7ef7' ],
 				  [ '缓存 ' + bytes(shown.memCache), '#f0b429' ],
@@ -691,23 +677,27 @@ return view.extend({
 			if (!started)
 				started = ts;
 
-			/* 页面切走后自动停机，避免后台空转 */
 			if (root && root.isConnected === false && ts - started > 1200) {
 				stopped = true;
 				if (pollId) clearInterval(pollId);
 				return;
 			}
 
-			/* 整秒连续滑动：p 从 0 走到 1，smoothstep 缓入缓出，数字全程都在动 */
-			var p = segT ? Math.min(1, (ts - segT) / POLL_MS) : 1,
-			    e = p * p * (3 - 2 * p),
-			    i, k;
+			/* 与采样无关的连续跟随：每一帧都在逼近目标，慢一点也绝不定格 */
+			var dt = prevFrame ? Math.min(ts - prevFrame, 120) : 16,
+			    k = 1 - Math.exp(-dt / TAU_MS),
+			    i, key, d;
+
+			prevFrame = ts;
 
 			for (i = 0; i < KEYS.length; i++) {
-				k = KEYS[i];
-				shown[k] = from[k] + (target[k] - from[k]) * e;
+				key = KEYS[i];
+				d = target[key] - shown[key];
 
-				if (p >= 1) shown[k] = target[k];
+				if (Math.abs(d) < Math.max(0.0008, Math.abs(target[key]) * 0.002))
+					shown[key] = target[key];
+				else
+					shown[key] += d * k;
 			}
 
 			if (ts - lastText >= TEXT_MS) {
