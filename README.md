@@ -1,6 +1,6 @@
 # HC5761 换 32MB Flash —— ImmortalWrt 自编译（GitHub Actions）
 
-HiWiFi HC5761（极路由 3）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub Actions 自编译 ImmortalWrt 23.05 的完整流程：分区补丁、编译触发、Breed 刷写、验收命令、软重启修复、LuCI 主题与插件，全部已验证。
+HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub Actions 自编译 ImmortalWrt 23.05 的完整流程：分区补丁、编译触发、Breed 刷写、验收命令、软重启修复、LuCI 主题与插件，全部已验证。
 
 **结论先行**：本仓库的 Actions 直接 Run 一次即可产出可刷的 `sysupgrade.bin`（同尺寸 32M → 32M 可直接网页升级，跨尺寸必须进 Breed）。
 
