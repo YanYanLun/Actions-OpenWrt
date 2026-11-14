@@ -6,11 +6,13 @@
 var NESTED = /^(kernel|rootfs|rootfs_data)$/;
 var HIST = 60;
 var POLL_MS = 1000;      /* 采样间隔：1 秒 */
-var TEXT_MS = 16;        /* 数字每帧刷新 */
-var DRAW_MS = 40;        /* 图表 25fps 重绘 */
+var TEXT_MS = 33;        /* 数字 30fps */
+var DRAW_MS = 33;        /* 曲线 30fps，只做面积填充，不再重画坐标轴 */
 var PAGE_TITLE = '首页';
 
-var PAD = { l: 50, r: 12, t: 10, b: 24 };
+var NET_W = 640, NET_H = 184;
+var MINI_W = 320, MINI_H = 72;
+var PAD = { l: 46, r: 10, t: 8, b: 18 };
 
 function parseCpu(txt) {
 	var m = (txt || '').match(/(?:^|\n)cpu\s+([^\n]+)/);
@@ -194,7 +196,7 @@ function smoothPath(ctx, pts) {
 	ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 
-/* 在给定矩形里画一条面积曲线：亚像素左移由 frac 控制，末尾用补间值接右边缘 */
+/* 只画面积+描边+末端圆点：这是每帧都要跑的路径，越轻越好 */
 function drawSeries(ctx, rect, series, style, max, frac) {
 	if (!series || series.length < 2)
 		return;
@@ -230,14 +232,8 @@ function drawSeries(ctx, rect, series, style, max, frac) {
 	ctx.strokeStyle = style.stroke;
 	ctx.lineWidth = 1.6;
 	ctx.stroke();
-
-	ctx.beginPath();
-	ctx.arc(pts[n - 1][0], pts[n - 1][1], 2.2, 0, Math.PI * 2);
-	ctx.fillStyle = style.stroke;
-	ctx.fill();
 }
 
-/* 迷你曲线（CPU / 内存卡片）：无坐标轴，铺满画布 */
 function drawMini(cv, series, style, max, frac) {
 	var ctx = cv.getContext('2d');
 
@@ -245,8 +241,8 @@ function drawMini(cv, series, style, max, frac) {
 	drawSeries(ctx, { x: 1, y: 4, w: cv.width - 2, h: cv.height - 8 }, series, style, max, frac);
 }
 
-/* 网速主图：带 y 轴刻度 + 时间刻度，像 iStoreOS 的「流量」卡 */
-function drawNet(cv, rx, tx, max, frac, now) {
+/* 静态层：网格线 + 纵轴刻度 + 时间刻度。每秒只画一次 */
+function drawNetGrid(cv, max, now, samples) {
 	var ctx = cv.getContext('2d'),
 	    W = cv.width,
 	    H = cv.height,
@@ -255,7 +251,6 @@ function drawNet(cv, rx, tx, max, frac, now) {
 
 	ctx.clearRect(0, 0, W, H);
 
-	/* 水平网格 + 纵轴刻度 */
 	ctx.lineWidth = 1;
 	ctx.strokeStyle = 'rgba(0,0,0,.07)';
 	ctx.fillStyle = 'rgba(0,0,0,.45)';
@@ -275,29 +270,35 @@ function drawNet(cv, rx, tx, max, frac, now) {
 		ctx.fillText(shortRate(v), PAD.l - 7, y);
 	}
 
-	/* 面积曲线 */
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'top';
+	ctx.fillStyle = 'rgba(0,0,0,.45)';
+
+	n = samples || 0;
+	step = rect.w / (HIST - 1);
+
+	for (k = 0; k < n; k += 15) {
+		x = rect.x + rect.w - (n - 1 - k) * step;
+
+		if (x < rect.x + 16 || x > rect.x + rect.w - 16)
+			continue;
+
+		ctx.fillText(clockText(now - (n - 1 - k) * POLL_MS), x, rect.y + rect.h + 6);
+	}
+}
+
+/* 动画层：只有两条面积曲线，背景透明，每帧重画 */
+function drawNetCurve(cv, rx, tx, max, frac) {
+	var ctx = cv.getContext('2d'),
+	    rect = { x: PAD.l, y: PAD.t, w: cv.width - PAD.l - PAD.r, h: cv.height - PAD.t - PAD.b };
+
+	ctx.clearRect(0, 0, cv.width, cv.height);
+
 	if (rx.length >= 2)
 		drawSeries(ctx, rect, rx, { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' }, max, frac);
 
 	if (tx.length >= 2)
 		drawSeries(ctx, rect, tx, { stroke: '#10a374', fillTop: 'rgba(16,163,116,.24)', fillBottom: 'rgba(16,163,116,.02)' }, max, frac);
-
-	/* 横轴时间刻度（随曲线一起左移） */
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'top';
-	ctx.fillStyle = 'rgba(0,0,0,.45)';
-
-	n = rx.length;
-	step = rect.w / (HIST - 1);
-
-	for (k = 0; k < n; k += 15) {
-		x = rect.x + rect.w - (n - 1 - k) * step - frac * step;
-
-		if (x < rect.x + 12 || x > rect.x + rect.w - 12)
-			continue;
-
-		ctx.fillText(clockText(now - (n - 1 - k) * POLL_MS), x, rect.y + rect.h + 7);
-	}
 }
 
 function drawDonut(cv, segs) {
@@ -393,7 +394,6 @@ return view.extend({
 		    prevCpu = null, prevNet = null, prevT = null,
 		    statLoaded = false, last = {}, refs = {},
 		    KEYS = [ 'cpu', 'memUsed', 'memCache', 'memFree', 'memTotal', 'dl', 'ul' ],
-		    /* from = 本段起点（上一次采样时的显示值），target = 本段终点 */
 		    from = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    target = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    shown = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
@@ -401,7 +401,7 @@ return view.extend({
 		    emaCpu = null, emaDl = null, emaUl = null,
 		    netMax = 0,
 		    started = 0, lastTs = 0, lastPoll = 0, lastDraw = 0, lastText = 0,
-		    pollId = 0, stopped = false, donutKey = '';
+		    pollId = 0, stopped = false, donutKey = '', gridKey = '';
 
 		var css = [
 			'.home{ font-size:13px; }',
@@ -411,6 +411,8 @@ return view.extend({
 			'.home-big{ font-size:25px; font-weight:700; line-height:1.25; font-variant-numeric:tabular-nums; }',
 			'.home-sub{ font-size:12px; opacity:.6; margin-bottom:8px; }',
 			'.home-cv{ display:block; width:100%; border-radius:6px; }',
+			'.home-shot{ position:relative; height:176px; }',
+			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:176px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
 			'.home-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-top:8px; }',
 			'.home-legend.center{ justify-content:center; gap:22px; }',
@@ -435,11 +437,14 @@ return view.extend({
 			/* SHORTCUTS:END */			'@media (max-width:820px){ .home-wide{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
-		var cvCpu = E('canvas', { class: 'home-cv', width: 480, height: 96, style: 'height:52px' }),
-		    cvMem = E('canvas', { class: 'home-cv', width: 480, height: 96, style: 'height:52px' }),
-		    cvNet = E('canvas', { class: 'home-cv', width: 900, height: 232, style: 'height:176px' }),
+		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
+		    cvMem = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
+		    cvNet = E('canvas', { width: NET_W, height: NET_H }),
+		    cvGrid = E('canvas', { width: NET_W, height: NET_H }),
 		    cvDonut = E('canvas', { class: 'home-cv home-donut', width: 320, height: 320 }),
 		    cvFlash = E('canvas', { class: 'home-cv', width: 900, height: 24, style: 'height:12px' });
+
+		refs.netShot = E('div', { class: 'home-shot' }, [ cvNet, cvGrid ]);
 
 		refs.cpuVal = E('div', { class: 'home-big' }, '—');
 		refs.cpuSub = E('div', { class: 'home-sub' }, '采样中…');
@@ -480,7 +485,7 @@ return view.extend({
 			E('div', { class: 'home-wide' }, [
 				E('div', { class: 'home-card' }, [
 					E('div', { class: 'home-head' }, [ E('h4', {}, '网速'), refs.netHead ]),
-					cvNet,
+					refs.netShot,
 					E('div', { class: 'home-legend center' }, [
 						E('span', {}, [ E('i', { style: 'background:#2f7ef7' }), '下载' ]),
 						E('span', {}, [ E('i', { style: 'background:#10a374' }), '上传' ])
@@ -521,12 +526,34 @@ return view.extend({
 		};
 
 		var BLUE = { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' },
-		    GREEN = { stroke: '#10a374', fillTop: 'rgba(16,163,116,.24)', fillBottom: 'rgba(16,163,116,.02)' },
 		    PURPLE = { stroke: '#7c5cf0', fillTop: 'rgba(124,92,240,.28)', fillBottom: 'rgba(124,92,240,.02)' };
 
 		var netName = '', cores = 0;
 
-		/* 采样：只更新端点，动画由 animate() 在整秒内平滑走过去 */
+		var paintText = function() {
+			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
+			    tCpu = shown.cpu.toFixed(1) + ' %',
+			    tMem = memPct.toFixed(1) + ' %',
+			    tDl = '↓ ' + rate(shown.dl * 1024),
+			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : '');
+
+			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
+			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
+			if (refs.netVal.textContent !== tDl) refs.netVal.textContent = tDl;
+			if (refs.netSub.textContent !== tUl) refs.netSub.textContent = tUl;
+
+			var tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
+			    tCpuSub = cores + ' 核 · 平滑刷新',
+			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
+
+			if (refs.cpuSub.textContent !== tCpuSub) refs.cpuSub.textContent = tCpuSub;
+			if (refs.memSub.textContent !== tMemSub) refs.memSub.textContent = tMemSub;
+			if (refs.netHead.textContent !== tHead) refs.netHead.textContent = tHead;
+		};
+
+		paintText();
+
+		/* 采样：只更新端点 + 每秒重画一次坐标轴层 */
 		var poll = function() {
 			var t = nowMs();
 
@@ -541,10 +568,11 @@ return view.extend({
 				statLoaded ? Promise.resolve(last.model) : safe(fs.read('/proc/device-tree/model'))
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
-				    pct = cpuPercent(prevCpu, cpu);
+				    pct = cpuPercent(prevCpu, cpu),
+				    i;
 
 				/* 冻结当前显示位置作为本段起点，再瞄准新值，整秒滑过去 */
-				for (var i = 0; i < KEYS.length; i++)
+				for (i = 0; i < KEYS.length; i++)
 					from[KEYS[i]] = shown[KEYS[i]];
 
 				if (pct !== null) {
@@ -599,6 +627,20 @@ return view.extend({
 					return x.toFixed(2);
 				}).join(' / ');
 
+				/* 量程每秒只在采样点更新一次，秒内保持不变，避免坐标轴来回跳 */
+				if (rxHist.length >= 2) {
+					var top = Math.max.apply(null, rxHist.concat(txHist).concat([ 10 ])) * 1.06;
+
+					netMax = netMax ? Math.max(top, netMax * 0.72) : top;
+
+					var gk = Math.round(netMax * 20) + ':' + rxHist.length + ':' + Math.floor(Date.now() / 1000);
+
+					if (gridKey !== gk) {
+						gridKey = gk;
+						drawNetGrid(cvGrid, netMax, Date.now(), rxHist.length);
+					}
+				}
+
 				if (!statLoaded) {
 					last.mtd = r[5];
 					last.ver = r[6];
@@ -636,30 +678,12 @@ return view.extend({
 
 					statLoaded = true;
 				}
+
+				paintText();
 			});
 		};
 
-		var paintText = function() {
-			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
-			    tCpu = shown.cpu.toFixed(1) + ' %',
-			    tMem = memPct.toFixed(1) + ' %',
-			    tDl = '↓ ' + rate(shown.dl * 1024),
-			    tUl = '↑ ' + rate(shown.ul * 1024) + (netName ? ' · 接口 ' + netName : '');
-
-			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
-			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
-			if (refs.netVal.textContent !== tDl) refs.netVal.textContent = tDl;
-			if (refs.netSub.textContent !== tUl) refs.netSub.textContent = tUl;
-
-			var tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
-			    tCpuSub = cores + ' 核 · 平滑刷新',
-			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
-
-			if (refs.cpuSub.textContent !== tCpuSub) refs.cpuSub.textContent = tCpuSub;
-			if (refs.memSub.textContent !== tMemSub) refs.memSub.textContent = tMemSub;
-			if (refs.netHead.textContent !== tHead) refs.netHead.textContent = tHead;
-		};
-
+		/* 每帧：只画两条面积曲线（CPU/内存迷你图 + 网速） */
 		var paintCharts = function(ts) {
 			var frac = lastPoll ? Math.max(0, Math.min(1, (ts - lastPoll) / POLL_MS)) : 0;
 
@@ -671,15 +695,9 @@ return view.extend({
 					shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0
 				]), PURPLE, 100, frac);
 
-			if (rxHist.length >= 2) {
-				/* 纵轴上限也跟着平滑变化，避免量程一跳一跳 */
-				var top = Math.max.apply(null, rxHist.concat(txHist).concat([ shown.dl, shown.ul, 10 ])) * 1.06;
-
-				netMax = netMax ? Math.max(top, netMax * 0.94) : top;
-
-				drawNet(cvNet, rxHist.slice(0, -1).concat([ shown.dl ]),
-				         txHist.slice(0, -1).concat([ shown.ul ]), netMax, frac, Date.now());
-			}
+			if (rxHist.length >= 2)
+				drawNetCurve(cvNet, rxHist.slice(0, -1).concat([ shown.dl ]),
+				             txHist.slice(0, -1).concat([ shown.ul ]), netMax || 10, frac);
 
 			/* 饼图按 0.5% 量化去重：数值稳定时不重复重绘，省这颗 CPU */
 			var dk = Math.round(shown.memUsed / (shown.memTotal || 1) * 200) + ':' +
