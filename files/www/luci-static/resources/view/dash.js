@@ -5,8 +5,7 @@
 
 var NESTED = /^(kernel|rootfs|rootfs_data)$/;
 var HIST = 60;
-
-/* ---------- 解析器（纯函数，可单独校验） ---------- */
+var PAGE_TITLE = '仪表盘';
 
 function parseCpu(txt) {
 	var m = (txt || '').match(/(?:^|\n)cpu\s+([^\n]+)/);
@@ -134,8 +133,6 @@ function cpuCores(txt) {
 	}).length;
 }
 
-/* ---------- 格式化 ---------- */
-
 function mib(b) {
 	return (b / 1048576).toFixed(2) + ' MiB';
 }
@@ -163,22 +160,22 @@ function uptimeText(sec) {
 	return m + ' 分 ' + Math.floor(sec % 60) + ' 秒';
 }
 
-/* ---------- 绘图 ---------- */
+function smoothPath(ctx, pts) {
+	var i;
 
-function grid(ctx, W, H, lines) {
-	ctx.strokeStyle = 'rgba(128,128,128,.18)';
-	ctx.lineWidth = 1;
+	ctx.moveTo(pts[0][0], pts[0][1]);
 
-	for (var i = 1; i <= lines; i++) {
-		var y = Math.round(H * i / (lines + 1)) + 0.5;
-		ctx.beginPath();
-		ctx.moveTo(0, y);
-		ctx.lineTo(W, y);
-		ctx.stroke();
+	for (i = 1; i < pts.length; i++) {
+		var mx = (pts[i - 1][0] + pts[i][0]) / 2,
+		    my = (pts[i - 1][1] + pts[i][1]) / 2;
+
+		ctx.quadraticCurveTo(pts[i - 1][0], pts[i - 1][1], mx, my);
 	}
+
+	ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 
-function drawSeries(ctx, W, H, series, stroke, fill, scaleMax) {
+function drawSeries(ctx, W, H, series, style, scaleMax) {
 	if (!series || series.length < 2)
 		return;
 
@@ -189,29 +186,31 @@ function drawSeries(ctx, W, H, series, stroke, fill, scaleMax) {
 	var n = series.length,
 	    step = W / (n - 1),
 	    pts = series.map(function(v, i) {
-	    	return [ i * step, H - (Math.min(v, max) / max) * (H - 14) - 6 ];
+	    	return [ i * step, H - (Math.min(v, max) / max) * (H - 16) - 8 ];
 	    });
 
+	var g = ctx.createLinearGradient(0, 0, 0, H);
+
+	g.addColorStop(0, style.fillTop);
+	g.addColorStop(1, style.fillBottom);
+
 	ctx.beginPath();
-	ctx.moveTo(pts[0][0], H);
-	pts.forEach(function(p) { ctx.lineTo(p[0], p[1]); });
-	ctx.lineTo(pts[n - 1][0], H);
+	smoothPath(ctx, pts);
+	ctx.lineTo(W, H);
+	ctx.lineTo(0, H);
 	ctx.closePath();
-	ctx.fillStyle = fill;
+	ctx.fillStyle = g;
 	ctx.fill();
 
 	ctx.beginPath();
-	pts.forEach(function(p, i) {
-		if (i === 0) ctx.moveTo(p[0], p[1]);
-		else ctx.lineTo(p[0], p[1]);
-	});
-	ctx.strokeStyle = stroke;
+	smoothPath(ctx, pts);
+	ctx.strokeStyle = style.stroke;
 	ctx.lineWidth = 2;
 	ctx.stroke();
 
 	ctx.beginPath();
-	ctx.arc(pts[n - 1][0], pts[n - 1][1], 3, 0, Math.PI * 2);
-	ctx.fillStyle = stroke;
+	ctx.arc(pts[n - 1][0], pts[n - 1][1], 2.6, 0, Math.PI * 2);
+	ctx.fillStyle = style.stroke;
 	ctx.fill();
 }
 
@@ -219,10 +218,9 @@ function drawChart(cv, seriesList, scaleMax) {
 	var ctx = cv.getContext('2d');
 
 	ctx.clearRect(0, 0, cv.width, cv.height);
-	grid(ctx, cv.width, cv.height, 3);
 
 	seriesList.forEach(function(s) {
-		drawSeries(ctx, cv.width, cv.height, s.data, s.stroke, s.fill, scaleMax);
+		drawSeries(ctx, cv.width, cv.height, s.data, s, scaleMax);
 	});
 }
 
@@ -240,8 +238,8 @@ function drawDonut(cv, segs) {
 
 	var cx = W / 2,
 	    cy = H / 2,
-	    r = Math.min(W, H) / 2 - 4,
-	    r0 = r * 0.62,
+	    r = Math.min(W, H) / 2 - 6,
+	    r0 = r * 0.64,
 	    a0 = -Math.PI / 2;
 
 	segs.forEach(function(s) {
@@ -277,8 +275,6 @@ function drawStack(cv, segs) {
 	});
 }
 
-/* ---------- 页面 ---------- */
-
 return view.extend({
 	parseCpu: parseCpu,
 	cpuPercent: cpuPercent,
@@ -289,6 +285,7 @@ return view.extend({
 	parseLoad: parseLoad,
 	parseKernel: parseKernel,
 	cpuCores: cpuCores,
+	smooth: smoothPath,
 
 	load: function() {
 		return Promise.resolve(null);
@@ -301,66 +298,72 @@ return view.extend({
 		    refs = {};
 
 		var css = [
-			'.dash{ font-size:13px; }',
-			'.dash-grid{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }',
-			'.dash-card{ border:1px solid rgba(0,0,0,.09); border-radius:10px; padding:12px 14px; }',
-			'.dash-card h4{ margin:0 0 8px; font-size:12px; font-weight:600; opacity:.65; letter-spacing:.4px; }',
-			'.dash-big{ font-size:25px; font-weight:700; line-height:1.25; }',
-			'.dash-sub{ font-size:12px; opacity:.62; margin-bottom:8px; }',
-			'.dash-cv{ display:block; width:100%; border-radius:6px; }',
-			'.dash-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.dash-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-top:8px; }',
-			'.dash-legend i{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }',
-			'.dash-info{ display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-top:12px;',
+			'.home{ font-size:13px; }',
+			'.home-grid{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); }',
+			'.home-card{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:12px 14px; }',
+			'.home-card h4{ margin:0 0 8px; font-size:12px; font-weight:600; opacity:.62; letter-spacing:.4px; }',
+			'.home-big{ font-size:25px; font-weight:700; line-height:1.25; }',
+			'.home-sub{ font-size:12px; opacity:.6; margin-bottom:8px; }',
+			'.home-cv{ display:block; width:100%; border-radius:6px; }',
+			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
+			'.home-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-top:8px; }',
+			'.home-legend i{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }',
+			'.home-info{ display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-top:12px;',
 			'  font-size:12px; border:1px solid rgba(0,0,0,.06); border-radius:10px; padding:10px 14px; }',
-			'.dash-info span{ opacity:.6; margin-right:6px; }'
+			'.home-info span{ opacity:.6; margin-right:6px; }',
+			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
+			'.home-head h4{ margin:0; }',
+			'.home-head .val{ font-size:12px; opacity:.72; }',
+			'.home-donut{ margin:0 auto; width:150px; height:150px; }',
+			'@media (max-width:820px){ .home-wide{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
-		var cvCpu = E('canvas', { class: 'dash-cv', width: 600, height: 120, style: 'height:58px' }),
-		    cvMem = E('canvas', { class: 'dash-cv', width: 600, height: 120, style: 'height:58px' }),
-		    cvNet = E('canvas', { class: 'dash-cv', width: 1200, height: 300, style: 'height:150px' }),
-		    cvDonut = E('canvas', { class: 'dash-cv', width: 300, height: 300, style: 'height:150px' }),
-		    cvFlash = E('canvas', { class: 'dash-cv', width: 1200, height: 24, style: 'height:12px' });
+		var cvCpu = E('canvas', { class: 'home-cv', width: 600, height: 120, style: 'height:58px' }),
+		    cvMem = E('canvas', { class: 'home-cv', width: 600, height: 120, style: 'height:58px' }),
+		    cvNet = E('canvas', { class: 'home-cv', width: 1200, height: 300, style: 'height:170px' }),
+		    cvDonut = E('canvas', { class: 'home-cv home-donut', width: 320, height: 320 }),
+		    cvFlash = E('canvas', { class: 'home-cv', width: 1200, height: 24, style: 'height:12px' });
 
-		refs.cpuVal = E('div', { class: 'dash-big' }, '—');
-		refs.cpuSub = E('div', { class: 'dash-sub' }, '采样中…');
-		refs.memVal = E('div', { class: 'dash-big' }, '—');
-		refs.memSub = E('div', { class: 'dash-sub' }, '采样中…');
-		refs.netVal = E('div', { class: 'dash-big' }, '—');
-		refs.netSub = E('div', { class: 'dash-sub' }, '—');
-		refs.upVal = E('div', { class: 'dash-big' }, '—');
-		refs.upSub = E('div', { class: 'dash-sub' }, '—');
-		refs.flashVal = E('div', { class: 'dash-big' }, '—');
-		refs.flashSub = E('div', { class: 'dash-sub' }, '—');
-		refs.donutLegend = E('div', { class: 'dash-legend' });
-		refs.flashLegend = E('div', { class: 'dash-legend' });
-		refs.info = E('div', { class: 'dash-info' });
+		refs.cpuVal = E('div', { class: 'home-big' }, '—');
+		refs.cpuSub = E('div', { class: 'home-sub' }, '采样中…');
+		refs.memVal = E('div', { class: 'home-big' }, '—');
+		refs.memSub = E('div', { class: 'home-sub' }, '采样中…');
+		refs.netVal = E('div', { class: 'home-big' }, '—');
+		refs.netSub = E('div', { class: 'home-sub' }, '—');
+		refs.netHead = E('div', { class: 'val' }, '—');
+		refs.upVal = E('div', { class: 'home-big' }, '—');
+		refs.upSub = E('div', { class: 'home-sub' }, '—');
+		refs.flashVal = E('div', { class: 'home-big' }, '—');
+		refs.flashSub = E('div', { class: 'home-sub' }, '—');
+		refs.donutLegend = E('div', { class: 'home-legend' });
+		refs.flashLegend = E('div', { class: 'home-legend' });
+		refs.info = E('div', { class: 'home-info' });
 
-		var root = E('div', { class: 'dash' }, [
+		var root = E('div', { class: 'home' }, [
 			E('style', {}, css),
-			E('h2', {}, '仪表盘'),
-			E('div', { class: 'dash-grid' }, [
-				E('div', { class: 'dash-card' }, [ E('h4', {}, 'CPU 使用率'), refs.cpuVal, refs.cpuSub, cvCpu ]),
-				E('div', { class: 'dash-card' }, [ E('h4', {}, '内存占用'), refs.memVal, refs.memSub, cvMem ]),
-				E('div', { class: 'dash-card' }, [ E('h4', {}, '实时网速'), refs.netVal, refs.netSub ]),
-				E('div', { class: 'dash-card' }, [ E('h4', {}, '运行时间 / 负载'), refs.upVal, refs.upSub ])
+			E('h2', {}, PAGE_TITLE),
+			E('div', { class: 'home-grid' }, [
+				E('div', { class: 'home-card' }, [ E('h4', {}, 'CPU 使用率'), refs.cpuVal, refs.cpuSub, cvCpu ]),
+				E('div', { class: 'home-card' }, [ E('h4', {}, '内存占用'), refs.memVal, refs.memSub, cvMem ]),
+				E('div', { class: 'home-card' }, [ E('h4', {}, '实时网速'), refs.netVal, refs.netSub ]),
+				E('div', { class: 'home-card' }, [ E('h4', {}, '运行时间 / 负载'), refs.upVal, refs.upSub ])
 			]),
-			E('div', { class: 'dash-wide' }, [
-				E('div', { class: 'dash-card' }, [
-					E('h4', {}, '近 60 次采样的网速曲线'),
+			E('div', { class: 'home-wide' }, [
+				E('div', { class: 'home-card' }, [
+					E('div', { class: 'home-head' }, [ E('h4', {}, '网速'), refs.netHead ]),
 					cvNet,
-					E('div', { class: 'dash-legend' }, [
-						E('span', {}, [ E('i', { style: 'background:#2f7ef7' }), '下行 KB/s' ]),
-						E('span', {}, [ E('i', { style: 'background:#10a374' }), '上行 KB/s' ])
+					E('div', { class: 'home-legend' }, [
+						E('span', {}, [ E('i', { style: 'background:#2f7ef7' }), '下行' ]),
+						E('span', {}, [ E('i', { style: 'background:#10a374' }), '上行' ])
 					])
 				]),
-				E('div', { class: 'dash-card' }, [
+				E('div', { class: 'home-card' }, [
 					E('h4', {}, '内存构成'),
 					cvDonut,
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'dash-card', style: 'margin-top:12px' }, [
+			E('div', { class: 'home-card', style: 'margin-top:12px' }, [
 				E('h4', {}, 'Flash 存储'),
 				refs.flashVal,
 				refs.flashSub,
@@ -379,6 +382,10 @@ return view.extend({
 			while (arr.length > HIST) arr.shift();
 		};
 
+		var BLUE = { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.32)', fillBottom: 'rgba(47,126,247,.02)' },
+		    GREEN = { stroke: '#10a374', fillTop: 'rgba(16,163,116,.26)', fillBottom: 'rgba(16,163,116,.02)' },
+		    PURPLE = { stroke: '#7c5cf0', fillTop: 'rgba(124,92,240,.28)', fillBottom: 'rgba(124,92,240,.02)' };
+
 		var tick = function() {
 			var t = Date.now();
 
@@ -392,7 +399,6 @@ return view.extend({
 				statLoaded ? Promise.resolve(last.ver) : safe(fs.read('/proc/version')),
 				statLoaded ? Promise.resolve(last.model) : safe(fs.read('/proc/device-tree/model'))
 			]).then(function(r) {
-				/* ---- CPU ---- */
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
 
@@ -400,12 +406,11 @@ return view.extend({
 					push(cpuHist, pct);
 					refs.cpuVal.textContent = pct.toFixed(1) + ' %';
 					refs.cpuSub.textContent = cpuCores(r[0]) + ' 核 · 每 4 秒采样';
-					drawChart(cvCpu, [ { data: cpuHist, stroke: '#2f7ef7', fill: 'rgba(47,126,247,.16)' } ], 100);
+					drawChart(cvCpu, [ { data: cpuHist, stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom } ], 100);
 				}
 
 				prevCpu = cpu;
 
-				/* ---- 内存 ---- */
 				var mem = parseMem(r[1]);
 
 				if (mem) {
@@ -414,7 +419,7 @@ return view.extend({
 					push(memHist, usedPct);
 					refs.memVal.textContent = usedPct.toFixed(1) + ' %';
 					refs.memSub.textContent = bytes(mem.used) + ' / ' + bytes(mem.total);
-					drawChart(cvMem, [ { data: memHist, stroke: '#7c5cf0', fill: 'rgba(124,92,240,.16)' } ], 100);
+					drawChart(cvMem, [ { data: memHist, stroke: PURPLE.stroke, fillTop: PURPLE.fillTop, fillBottom: PURPLE.fillBottom } ], 100);
 
 					drawDonut(cvDonut, [
 						{ v: mem.used, c: '#2f7ef7' },
@@ -432,7 +437,6 @@ return view.extend({
 					});
 				}
 
-				/* ---- 网速 ---- */
 				var net = parseNet(r[2]);
 
 				if (net && prevNet && prevT) {
@@ -447,12 +451,13 @@ return view.extend({
 
 						refs.netVal.textContent = '↓ ' + rate(rx * 1024);
 						refs.netSub.textContent = '↑ ' + rate(tx * 1024) + ' · 接口 ' + net.name;
+						refs.netHead.textContent = '下载 ' + rate(rx * 1024) + ' ／ 上传 ' + rate(tx * 1024);
 
-						var top = Math.max.apply(null, rxHist.concat(txHist).concat([ 10 ]));
+						var top = Math.max.apply(null, rxHist.concat(txHist).concat([ 10 ])) * 1.06;
 
 						drawChart(cvNet, [
-							{ data: rxHist, stroke: '#2f7ef7', fill: 'rgba(47,126,247,.16)' },
-							{ data: txHist, stroke: '#10a374', fill: 'rgba(16,163,116,.14)' }
+							{ data: rxHist, stroke: BLUE.stroke, fillTop: BLUE.fillTop, fillBottom: BLUE.fillBottom },
+							{ data: txHist, stroke: GREEN.stroke, fillTop: GREEN.fillTop, fillBottom: GREEN.fillBottom }
 						], top);
 					}
 				}
@@ -460,13 +465,11 @@ return view.extend({
 				prevNet = net;
 				prevT = t;
 
-				/* ---- 运行时间 ---- */
 				refs.upVal.textContent = uptimeText(parseUptime(r[3]));
 				refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
 					return x.toFixed(2);
 				}).join(' / ');
 
-				/* ---- 静态：Flash / 内核 / 型号（只算一次） ---- */
 				if (!statLoaded) {
 					last.mtd = r[5];
 					last.ver = r[6];
