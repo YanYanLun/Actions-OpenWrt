@@ -73,7 +73,7 @@ return view.extend({
 						E('th', { class: 'th' }, '擦除块'),
 						E('th', { class: 'th' }, '类型')
 					]),
-					rows
+					...rows
 				])
 			]),
 			E('div', { class: 'cbi-section' }, [
