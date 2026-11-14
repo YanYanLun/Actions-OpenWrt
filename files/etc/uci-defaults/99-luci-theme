@@ -1,0 +1,18 @@
+#!/bin/sh
+# 设定 LuCI 默认主题：优先 Argon（现代款），没有就退回 Material（参考图那款），
+# 两者都不存在就保持系统默认 bootstrap。
+# 想临时换主题（不用重编）：uci set luci.main.mediaurlbase='/luci-static/material'
+
+theme=''
+[ -d /www/luci-static/argon ] && theme='/luci-static/argon'
+[ -z "$theme" ] && [ -d /www/luci-static/material ] && theme='/luci-static/material'
+[ -z "$theme" ] && exit 0
+
+uci -q get luci.main >/dev/null || exit 0
+
+uci -q batch <<-EOF
+	set luci.main.mediaurlbase='$theme'
+	commit luci
+EOF
+
+exit 0
