@@ -1,0 +1,10 @@
+{
+	"luci-app-flashinfo": {
+		"description": "Allow reading the MTD partition table for the Flash info page",
+		"read": {
+			"file": {
+				"/proc/mtd": [ "read" ]
+			}
+		}
+	}
+}

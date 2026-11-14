@@ -7,3 +7,5 @@
 .gitattributes text eol=lf
 feeds.conf.default text eol=lf
 files/etc/uci-defaults/* text eol=lf
+# files/ 目录整体进固件，JS/JSON 也不能带 CR
+files/**     text eol=lf

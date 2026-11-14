@@ -1,0 +1,13 @@
+{
+	"admin/status/flash": {
+		"title": "Flash 信息",
+		"order": 70,
+		"action": {
+			"type": "view",
+			"path": "flashinfo"
+		},
+		"depends": {
+			"acl": [ "luci-app-flashinfo" ]
+		}
+	}
+}
