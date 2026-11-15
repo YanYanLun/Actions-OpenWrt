@@ -610,15 +610,15 @@ return view.extend({
 		    PURPLE = { stroke: '#7c5cf0', fillTop: 'rgba(124,92,240,.28)', fillBottom: 'rgba(124,92,240,.02)' };
 
 		var paintText = function() {
-			var memPct = shown.memTotal > 0 ? shown.memUsed / shown.memTotal * 100 : 0,
-			    tCpu = shown.cpu.toFixed(1) + ' %',
+			var memPct = target.memTotal > 0 ? target.memUsed / target.memTotal * 100 : 0,
+			    tCpu = target.cpu.toFixed(1) + ' %',
 			    tMem = memPct.toFixed(1) + ' %',
-			    tDl = rate(shown.dl * 1024),
-			    tUl = rate(shown.ul * 1024),
-			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v4',
-			    tCpuSub = cores + ' 核 · 平滑刷新 v4',
-			    tMemSub = bytes(shown.memUsed) + ' / ' + bytes(shown.memTotal),
-			    tHead = '下载 ' + shortRate(shown.dl) + ' ／ 上传 ' + shortRate(shown.ul);
+			    tDl = rate(target.dl * 1024),
+			    tUl = rate(target.ul * 1024),
+			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v5',
+			    tCpuSub = cores + ' 核 · 平滑刷新 v5',
+			    tMemSub = bytes(target.memUsed) + ' / ' + bytes(target.memTotal),
+			    tHead = '下载 ' + shortRate(target.dl) + ' ／ 上传 ' + shortRate(target.ul);
 
 			if (refs.cpuVal.textContent !== tCpu) refs.cpuVal.textContent = tCpu;
 			if (refs.memVal.textContent !== tMem) refs.memVal.textContent = tMem;
@@ -798,14 +798,7 @@ return view.extend({
 					{ v: shown.memFree, c: 'rgba(128,128,128,.35)' }
 				]);
 
-				refs.donutLegend.textContent = '';
-				[ [ '已用 ' + bytes(shown.memUsed), '#2f7ef7' ],
-				  [ '缓存 ' + bytes(shown.memCache), '#f0b429' ],
-				  [ '可用 ' + bytes(shown.memFree), 'rgba(128,128,128,.5)' ] ].forEach(function(x) {
-					refs.donutLegend.appendChild(E('span', {}, [
-						E('i', { style: 'background:' + x[1] }), x[0]
-					]));
-				});
+
 			}
 		};
 
@@ -839,10 +832,6 @@ return view.extend({
 					shown[key] += d * k;
 			}
 
-			if (ts - lastText >= TEXT_MS) {
-				lastText = ts;
-				paintText();
-			}
 
 			if (ts - lastDraw >= DRAW_MS) {
 				lastDraw = ts;
