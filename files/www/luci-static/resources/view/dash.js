@@ -439,6 +439,7 @@ return view.extend({
 		    target = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    shown = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    emaCpu = null, emaDl = null, emaUl = null,
+		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0,
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
@@ -566,12 +567,12 @@ return view.extend({
 
 		var paintText = function() {
 			var memPct = target.memTotal > 0 ? target.memUsed / target.memTotal * 100 : 0,
-			    tCpu = target.cpu.toFixed(1) + ' %',
+			    tCpu = (cpuAvg === null ? target.cpu : cpuAvg).toFixed(1) + ' %',
 			    tMem = memPct.toFixed(1) + ' %',
 			    tDl = rate(target.dl * 1024),
 			    tUl = rate(target.ul * 1024),
-			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v5',
-			    tCpuSub = cores + ' 核 · 平滑刷新 v5',
+			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v5.2',
+			    tCpuSub = cores + ' 核 · 平滑刷新 v5.2',
 			    tMemSub = bytes(target.memUsed) + ' / ' + bytes(target.memTotal),
 			    tHead = '下载 ' + shortRate(target.dl) + ' ／ 上传 ' + shortRate(target.ul);
 
@@ -609,6 +610,13 @@ return view.extend({
 				if (pct !== null) {
 					emaCpu = (emaCpu === null) ? pct : (emaCpu * 0.45 + pct * 0.55);
 					target.cpu = emaCpu;
+
+					/* 显示用：最近 3 次采样的滑动平均，压住单核每跳 6%↔100% 的抖动 */
+					cpu3.push(pct);
+					if (cpu3.length > 3) cpu3.shift();
+					var sum3 = 0;
+					for (var q = 0; q < cpu3.length; q++) sum3 += cpu3[q];
+					cpuAvg = sum3 / cpu3.length;
 					push(cpuHist, emaCpu, t, Date.now());
 				}
 
