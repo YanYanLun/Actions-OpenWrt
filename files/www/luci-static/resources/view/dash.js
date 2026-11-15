@@ -13,7 +13,7 @@ var TAU_MS = 300;        /* 数值跟随时间常数：永不定格，连续逼�
 
 var NET_W = 640, NET_H = 184;
 var MINI_W = 320, MINI_H = 72;
-var PAD = { l: 46, r: 10, t: 8, b: 22 };
+var PAD = { l: 14, r: 12, t: 10, b: 12 };
 
 var PAGE_TITLE = '仪表盘';
 
@@ -286,51 +286,27 @@ function drawMini(cv, series, style, max, now, tip) {
 	drawSeries(ctx, { x: 1, y: 4, w: MINI_W - 2, h: MINI_H - 8 }, series, style, max, now, tip);
 }
 
-/* 坐标轴层：网格 + 纵轴刻度 + 时间刻度，4fps 重画，跟着曲线一起左滑 */
+/* 坐标轴层：只保留 5 条横向网格线（刻度文字已按要求去掉，避免小字发虚） */
 function drawNetGrid(cv, max, now, series) {
-	var ctx = fitLayer(cv, NET_W, NET_H),
+	var ctx
+ = fitLayer(cv, NET_W, NET_H),
 	    W = NET_W,
 	    H = NET_H,
 	    rect = { x: PAD.l, y: PAD.t, w: W - PAD.l - PAD.r, h: H - PAD.t - PAD.b },
-	    step = rect.w / (HIST - 1),
-	    sp = step / POLL_MS,
-	    i, y, v, x, t;
+	    i, y;
 
 	ctx.clearRect(0, 0, W, H);
 
 	ctx.lineWidth = 1;
 	ctx.strokeStyle = 'rgba(0,0,0,.07)';
-	ctx.fillStyle = 'rgba(0,0,0,.45)';
-	ctx.font = '11px system-ui,-apple-system,sans-serif';
-	ctx.textAlign = 'right';
-	ctx.textBaseline = 'middle';
 
 	for (i = 0; i <= 4; i++) {
 		y = rect.y + rect.h * i / 4;
-		v = max * (1 - i / 4);
 
 		ctx.beginPath();
 		ctx.moveTo(rect.x, y + .5);
 		ctx.lineTo(rect.x + rect.w, y + .5);
 		ctx.stroke();
-
-		ctx.fillText(shortRate(v), PAD.l - 7, y);
-	}
-
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'top';
-
-	if (!series || !series.length)
-		return;
-
-	for (i = series.length - 1; i >= 0; i -= 15) {
-		t = series[i].w;
-		x = rect.x + rect.w - (now - series[i].t) * sp;
-
-		if (x < rect.x + 14 || x > rect.x + rect.w - 14)
-			continue;
-
-		ctx.fillText(clockText(t), x, rect.y + rect.h + 8);
 	}
 }
 
@@ -571,8 +547,8 @@ return view.extend({
 			    tMem = memPct.toFixed(1) + ' %',
 			    tDl = rate(target.dl * 1024),
 			    tUl = rate(target.ul * 1024),
-			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v5.2',
-			    tCpuSub = cores + ' 核 · 平滑刷新 v5.2',
+			    tIf = (netName ? '接口 ' + netName : '—') + ' · 每秒采样 · 平滑刷新 v5.3',
+			    tCpuSub = cores + ' 核 · 平滑刷新 v5.3',
 			    tMemSub = bytes(target.memUsed) + ' / ' + bytes(target.memTotal),
 			    tHead = '下载 ' + shortRate(target.dl) + ' ／ 上传 ' + shortRate(target.ul);
 
