@@ -13,7 +13,7 @@ var TAU_MS = 300;        /* 数值跟随时间常数：永不定格，连续逼�
 
 var NET_W = 640, NET_H = 184;
 var MINI_W = 320, MINI_H = 72;
-var PAD = { l: 46, r: 10, t: 8, b: 18 };
+var PAD = { l: 46, r: 10, t: 8, b: 22 };
 
 var PAGE_TITLE = '仪表盘';
 
@@ -252,18 +252,45 @@ function drawSeries(ctx, rect, series, style, max, now, tip) {
 	ctx.stroke();
 }
 
-function drawMini(cv, series, style, max, now, tip) {
-	var ctx = cv.getContext('2d');
+/* 画布底层像素跟随显示尺寸 × DPR，避免逻辑坐标被放大导致文字发虚 */
+function fitLayer(cv, lw, lh) {
+	var ctx = cv.getContext('2d'),
+	    dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2),
+	    cssW = cv.clientWidth || 0,
+	    cssH = cv.clientHeight || 0,
+	    bw, bh;
 
-	ctx.clearRect(0, 0, cv.width, cv.height);
-	drawSeries(ctx, { x: 1, y: 4, w: cv.width - 2, h: cv.height - 8 }, series, style, max, now, tip);
+	if (cssW > 0 && cssH > 0) {
+		bw = Math.round(cssW * dpr);
+		bh = Math.round(cssH * dpr);
+
+		if (cv.width !== bw || cv.height !== bh) {
+			cv.width = bw;
+			cv.height = bh;
+		}
+	}
+
+	bw = cv.width;
+	bh = cv.height;
+
+	if (ctx.setTransform)
+		ctx.setTransform(bw / lw, 0, 0, bh / lh, 0, 0);
+
+	return ctx;
+}
+
+function drawMini(cv, series, style, max, now, tip) {
+	var ctx = fitLayer(cv, MINI_W, MINI_H);
+
+	ctx.clearRect(0, 0, MINI_W, MINI_H);
+	drawSeries(ctx, { x: 1, y: 4, w: MINI_W - 2, h: MINI_H - 8 }, series, style, max, now, tip);
 }
 
 /* 坐标轴层：网格 + 纵轴刻度 + 时间刻度，4fps 重画，跟着曲线一起左滑 */
 function drawNetGrid(cv, max, now, series) {
-	var ctx = cv.getContext('2d'),
-	    W = cv.width,
-	    H = cv.height,
+	var ctx = fitLayer(cv, NET_W, NET_H),
+	    W = NET_W,
+	    H = NET_H,
 	    rect = { x: PAD.l, y: PAD.t, w: W - PAD.l - PAD.r, h: H - PAD.t - PAD.b },
 	    step = rect.w / (HIST - 1),
 	    sp = step / POLL_MS,
@@ -303,25 +330,25 @@ function drawNetGrid(cv, max, now, series) {
 		if (x < rect.x + 14 || x > rect.x + rect.w - 14)
 			continue;
 
-		ctx.fillText(clockText(t), x, rect.y + rect.h + 6);
+		ctx.fillText(clockText(t), x, rect.y + rect.h + 8);
 	}
 }
 
 /* 动画层：只有两条面积曲线，背景透明 */
 function drawNetCurve(cv, rx, tx, max, now, dl, ul) {
-	var ctx = cv.getContext('2d'),
-	    rect = { x: PAD.l, y: PAD.t, w: cv.width - PAD.l - PAD.r, h: cv.height - PAD.t - PAD.b };
+	var ctx = fitLayer(cv, NET_W, NET_H),
+	    rect = { x: PAD.l, y: PAD.t, w: NET_W - PAD.l - PAD.r, h: NET_H - PAD.t - PAD.b };
 
-	ctx.clearRect(0, 0, cv.width, cv.height);
+	ctx.clearRect(0, 0, NET_W, NET_H);
 
 	drawSeries(ctx, rect, rx, { stroke: '#2f7ef7', fillTop: 'rgba(47,126,247,.30)', fillBottom: 'rgba(47,126,247,.02)' }, max, now, dl);
 	drawSeries(ctx, rect, tx, { stroke: '#10a374', fillTop: 'rgba(16,163,116,.22)', fillBottom: 'rgba(16,163,116,.02)' }, max, now, ul);
 }
 
 function drawDonut(cv, segs) {
-	var ctx = cv.getContext('2d'),
-	    W = cv.width,
-	    H = cv.height;
+	var ctx = fitLayer(cv, 320, 320),
+	    W = 320,
+	    H = 320;
 
 	ctx.clearRect(0, 0, W, H);
 
@@ -424,8 +451,8 @@ return view.extend({
 			'.home-big{ font-size:25px; font-weight:700; line-height:1.25; font-variant-numeric:tabular-nums; }',
 			'.home-sub{ font-size:12px; opacity:.6; margin-bottom:8px; }',
 			'.home-cv{ display:block; width:100%; border-radius:6px; }',
-			'.home-shot{ position:relative; height:176px; }',
-			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:176px; display:block; pointer-events:none; }',
+			'.home-shot{ position:relative; height:190px; }',
+			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
 			'.home-two{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); margin-top:12px; }',
 			'.home-rate{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
@@ -687,6 +714,16 @@ return view.extend({
 				}
 
 				paintText();
+
+				/* 内存构成图例用采样值刷新，避免跟随动画取整后长期不更新 */
+				refs.donutLegend.textContent = '';
+				[ [ '已用 ' + bytes(target.memUsed), '#2f7ef7' ],
+					  [ '缓存 ' + bytes(target.memCache), '#f0b429' ],
+					  [ '可用 ' + bytes(target.memFree), 'rgba(128,128,128,.5)' ] ].forEach(function(x) {
+					refs.donutLegend.appendChild(E('span', {}, [
+									E('i', { style: 'background:' + x[1] }), x[0]
+					]));
+				});
 			});
 		};
 
