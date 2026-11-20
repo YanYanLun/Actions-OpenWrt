@@ -667,6 +667,8 @@ return view.extend({
 			'.wifi-dot{ width:7px; height:7px; border-radius:50%; background:#10a374; display:inline-block; }',
 			'.wifi-dot.off{ background:#c0c6cf; }',
 			'.wifi-state{ font-size:11px; opacity:.6; margin-left:auto; }',
+			'.wifi-edit{ font-size:11px; line-height:1; padding:4px 9px; border-radius:6px; border:1px solid rgba(47,126,247,.35); color:#2f7ef7; text-decoration:none; white-space:nowrap; }',
+			'.wifi-edit:hover{ background:rgba(47,126,247,.08); }',
 			'.wifi-ssid{ font-size:14px; font-weight:600; margin-bottom:8px; }',
 			'.wifi-rows{ display:grid; gap:6px; font-size:12px; }',
 			'.wifi-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
@@ -889,7 +891,8 @@ return view.extend({
 			}
 
 			var wlans = wlanIfaces(last.netDev),
-			    on = radios.filter(function(r) { return !r.disabled; }).length;
+			    on = radios.filter(function(r) { return !r.disabled; }).length,
+			    editUrl = (typeof L !== 'undefined' && L.url) ? L.url('admin/network/wireless') : '/cgi-bin/luci/admin/network/wireless';
 
 			refs.wifiHead.textContent = on + ' / ' + radios.length + ' 启用';
 
@@ -919,7 +922,8 @@ return view.extend({
 					E('div', { class: 'wifi-top' }, [
 						E('span', { class: 'wifi-badge' }, bandLabel(rd.band)),
 						E('span', { class: 'wifi-dot' + (rd.disabled ? ' off' : '') }),
-						E('span', { class: 'wifi-state' }, rd.disabled ? '关闭' : '启用')
+						E('span', { class: 'wifi-state' }, rd.disabled ? '关闭' : '启用'),
+						E('a', { class: 'wifi-edit', href: editUrl, title: '编辑 ' + (rd.ssid || bandLabel(rd.band)) }, '编辑')
 					]),
 					E('div', { class: 'wifi-ssid' }, rd.ssid || '—'),
 					rowsEl
