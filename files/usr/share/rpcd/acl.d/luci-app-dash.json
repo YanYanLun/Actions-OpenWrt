@@ -1,6 +1,6 @@
 {
 	"luci-app-dash": {
-		"description": "仪表盘：读取 /proc 统计数据",
+		"description": "仪表盘：读取 /proc 统计数据与无线配置",
 		"read": {
 			"file": {
 				"/proc/stat": [ "read" ],
@@ -15,7 +15,9 @@
 				"/proc/device-tree/model": [ "read" ],
 				"/proc/net/arp": [ "read" ],
 				"/tmp/dhcp.leases": [ "read" ],
-				"/etc/openwrt_release": [ "read" ]
+				"/etc/openwrt_release": [ "read" ],
+				"/etc/config/wireless": [ "read" ],
+				"/sys/class/net/": [ "read" ]
 			}
 		}
 	}

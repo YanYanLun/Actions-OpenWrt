@@ -239,6 +239,107 @@ function devLabel(d) {
 	return d;
 }
 
+/* /etc/config/wireless：解析 wifi-device / wifi-iface 配置 */
+function parseWireless(txt) {
+	var sections = [], cur = null;
+
+	(txt || '').split(/\r?\n/).forEach(function(l) {
+		var cfg = l.match(/^config\s+(\S+)\s+(?:'([^']*)'|(\S+))/);
+
+		if (cfg) {
+			cur = { type: cfg[1], name: cfg[2] || cfg[3] || '', opts: {} };
+			sections.push(cur);
+			return;
+		}
+
+		if (!cur)
+			return;
+
+		var opt = l.match(/^\s*option\s+(\S+)\s+(?:'([^']*)'|"([^"]*)"|(\S+))/);
+
+		if (opt)
+			cur.opts[opt[1]] = opt[2] !== undefined ? opt[2] : (opt[3] !== undefined ? opt[3] : opt[4]);
+	});
+
+	var devices = {}, ifaces = [];
+
+	sections.forEach(function(s) {
+		if (s.type === 'wifi-device' || s.type === 'wifi-radio')
+			devices[s.name] = s.opts;
+		else if (s.type === 'wifi-iface')
+			ifaces.push(s.opts);
+	});
+
+	var radios = [], idx = 0;
+
+	Object.keys(devices).sort().forEach(function(name) {
+		var d = devices[name],
+			iface = ifaces.filter(function(i) { return i.device === name; })[0] || {},
+			band = d.band || (/11a|11ac|11ax/i.test(d.hwmode || '') ? '5g' : '2g'),
+			ch = Number(d.channel) || 0,
+			freq = band === '5g' ? 5000 + ch * 5 : 2407 + ch * 5;
+
+		radios.push({
+			radio: name,
+			ifname: 'wlan' + idx,
+			band: band,
+			channel: ch,
+			freq: freq,
+			htmode: d.htmode || '',
+			txpower: d.txpower || '',
+			disabled: d.disabled === '1',
+			ssid: iface.ssid || '',
+			mode: iface.mode || '',
+			encryption: iface.encryption || ''
+		});
+		idx++;
+	});
+
+	return radios;
+}
+
+/* /proc/net/dev 里的无线网卡名（按名称排序，与 radio 顺序对齐） */
+function wlanIfaces(txt) {
+	var out = [];
+
+	(txt || '').split('\n').forEach(function(l) {
+		var p = l.split(':'),
+		    n = p[0] && p[0].trim();
+
+		if (/^wlan/i.test(n))
+			out.push(n);
+	});
+
+	return out.sort();
+}
+
+function bandLabel(band) {
+	return band === '5g' ? '5 GHz' : '2.4 GHz';
+}
+
+function encLabel(e) {
+	if (!e || e === 'none')
+		return '开放';
+	if (/psk2|wpa2/i.test(e))
+		return 'WPA2-PSK';
+	if (/wpa3|sae/i.test(e))
+		return 'WPA3';
+	return e;
+}
+
+function modeLabel(m) {
+	if (m === 'ap')
+		return 'Master';
+	if (m === 'sta')
+		return 'Station';
+	return m || '—';
+}
+
+function widthLabel(ht) {
+	var m = (ht || '').match(/(\d+)/);
+	return m ? m[1] + ' MHz' : '—';
+}
+
 function mib(b) {
 	return (b / 1048576).toFixed(2) + ' MiB';
 }
@@ -523,6 +624,8 @@ return view.extend({
 	parseRelease: parseRelease,
 	parseLeases: parseLeases,
 	parseArp: parseArp,
+	parseWireless: parseWireless,
+	wlanIfaces: wlanIfaces,
 	mergeClients: mergeClients,
 	devLabel: devLabel,
 	smooth: smoothPath,
@@ -541,6 +644,7 @@ return view.extend({
 		    emaCpu = null, emaDl = null, emaUl = null,
 		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0, clients = [],
+		    radios = [], wifiMac = {}, last = { netDev: '' },
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
 
@@ -555,7 +659,20 @@ return view.extend({
 			'.home-shot{ position:relative; height:190px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.home-two{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); margin-top:12px; }',
+			'.home-three{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr); margin-top:12px; }',
+			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
+			'.wifi-radio{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
+			'.wifi-top{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }',
+			'.wifi-badge{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; background:rgba(47,126,247,.1); color:#2f7ef7; }',
+			'.wifi-dot{ width:7px; height:7px; border-radius:50%; background:#10a374; display:inline-block; }',
+			'.wifi-dot.off{ background:#c0c6cf; }',
+			'.wifi-state{ font-size:11px; opacity:.6; margin-left:auto; }',
+			'.wifi-ssid{ font-size:14px; font-weight:600; margin-bottom:8px; }',
+			'.wifi-rows{ display:grid; gap:6px; font-size:12px; }',
+			'.wifi-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
+			'.wifi-rows span{ opacity:.58; }',
+			'.wifi-rows b{ font-weight:600; font-variant-numeric:tabular-nums; text-align:right; }',
+			'.wifi-rows .mac{ font-family:ui-monospace,Consolas,monospace; letter-spacing:.2px; }',
 			'.home-rate{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
 			'.home-rate .lb{ font-size:12px; opacity:.62; margin-bottom:2px; }',
 			'.home-legend{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-top:8px; }',
@@ -586,7 +703,7 @@ return view.extend({
 			'.home-quick span{ font-size:12px; white-space:nowrap; }',
 			'@media (max-width:1100px){ .home-quick{ grid-template-columns:repeat(4,minmax(0,1fr)); } }',
 			/* SHORTCUTS:END */
-			'@media (max-width:820px){ .home-wide, .home-two{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:820px){ .home-wide, .home-three, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -627,6 +744,8 @@ return view.extend({
 		/* SHORTCUTS:END */
 		refs.devHead = E('div', { class: 'val' }, '—');
 		refs.devTable = E('div', {});
+		refs.wifiHead = E('div', { class: 'val' }, '—');
+		refs.wifi = E('div', { class: 'home-wifi' });
 
 		var root = E('div', { class: 'home' }, [
 			E('style', {}, css),
@@ -660,7 +779,7 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-two' }, [
+			E('div', { class: 'home-three' }, [
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, 'Flash 存储'),
 					refs.flashVal,
@@ -671,6 +790,10 @@ return view.extend({
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, '设备信息'),
 					refs.info
+				]),
+				E('div', { class: 'home-card' }, [
+					E('div', { class: 'home-head' }, [ E('h4', {}, '无线网络'), refs.wifiHead ]),
+					refs.wifi
 				])
 			]),
 			E('div', { class: 'home-card home-devs' }, [
@@ -756,6 +879,56 @@ return view.extend({
 
 		renderClients();
 
+		var renderWireless = function() {
+			refs.wifi.textContent = '';
+
+			if (!radios.length) {
+				refs.wifiHead.textContent = '—';
+				refs.wifi.appendChild(E('div', { class: 'home-empty' }, '未检测到无线配置'));
+				return;
+			}
+
+			var wlans = wlanIfaces(last.netDev),
+			    on = radios.filter(function(r) { return !r.disabled; }).length;
+
+			refs.wifiHead.textContent = on + ' / ' + radios.length + ' 启用';
+
+			radios.forEach(function(rd, i) {
+				rd.ifname = wlans[i] || rd.ifname;
+
+				var count = clients.filter(function(c) { return c.dev === rd.ifname; }).length,
+				    mac = wifiMac[rd.ifname] || '—',
+				    rows = [
+						[ '信道', 'Ch ' + (rd.channel || '—') + (rd.freq ? ' · ' + rd.freq + ' MHz' : '') ],
+						[ '模式', modeLabel(rd.mode) ],
+						[ '带宽', widthLabel(rd.htmode) ],
+						[ '加密', encLabel(rd.encryption) ],
+						[ 'BSSID', mac ],
+						[ '关联', count + ' 台' ]
+					],
+				    rowsEl = E('div', { class: 'wifi-rows' });
+
+				rows.forEach(function(r) {
+					rowsEl.appendChild(E('div', { class: 'row' }, [
+						E('span', {}, r[0]),
+						E('b', { class: r[0] === 'BSSID' ? 'mac' : '' }, r[1])
+					]));
+				});
+
+				refs.wifi.appendChild(E('div', { class: 'wifi-radio' }, [
+					E('div', { class: 'wifi-top' }, [
+						E('span', { class: 'wifi-badge' }, bandLabel(rd.band)),
+						E('span', { class: 'wifi-dot' + (rd.disabled ? ' off' : '') }),
+						E('span', { class: 'wifi-state' }, rd.disabled ? '关闭' : '启用')
+					]),
+					E('div', { class: 'wifi-ssid' }, rd.ssid || '—'),
+					rowsEl
+				]));
+			});
+		};
+
+		renderWireless();
+
 		var poll = function() {
 			var t = clock(),
 			    slow = (slowTick++ % 5) === 0;
@@ -773,7 +946,8 @@ return view.extend({
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq')),
 				slow ? safe(fs.read('/tmp/dhcp.leases')) : Promise.resolve(null),
 				slow ? safe(fs.read('/proc/net/arp')) : Promise.resolve(null),
-				statLoaded ? Promise.resolve(null) : safe(fs.read('/etc/openwrt_release'))
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/etc/openwrt_release')),
+				slow ? safe(fs.read('/etc/config/wireless')) : Promise.resolve(null)
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -827,6 +1001,8 @@ return view.extend({
 				prevNet = net;
 				prevT = t;
 
+				last.netDev = r[2];
+
 				if (slow) {
 					refs.upVal.textContent = uptimeText(parseUptime(r[3]));
 					refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
@@ -835,6 +1011,24 @@ return view.extend({
 
 					clients = mergeClients(parseArp(r[11]), parseLeases(r[10]));
 					renderClients();
+
+					radios = parseWireless(r[13]);
+					var wlans = wlanIfaces(r[2]);
+
+					radios.forEach(function(rd, i) {
+						rd.ifname = wlans[i] || rd.ifname;
+					});
+
+					renderWireless();
+
+					Promise.all(radios.map(function(rd) {
+						return rd.ifname ? safe(fs.read('/sys/class/net/' + rd.ifname + '/address')) : Promise.resolve('');
+					})).then(function(macs) {
+						radios.forEach(function(rd, i) {
+							wifiMac[rd.ifname] = (macs[i] || '').trim().toLowerCase();
+						});
+						renderWireless();
+					});
 				}
 
 				if (rxHist.length) {
