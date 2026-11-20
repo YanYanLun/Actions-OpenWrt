@@ -141,6 +141,104 @@ function cpuCores(txt) {
 	}).length;
 }
 
+/* /etc/openwrt_release：固件版本描述 */
+function parseRelease(txt) {
+	var o = {};
+
+	(txt || '').split(/\r?\n/).forEach(function(l) {
+		var m = l.match(/^([A-Z_]+)="?([^"]*)"?$/);
+
+		if (m)
+			o[m[1]] = m[2];
+	});
+
+	return o.DISTRIB_DESCRIPTION ||
+		[ o.DISTRIB_NAME, o.DISTRIB_VERSION, o.DISTRIB_REVISION ].filter(Boolean).join(' ') || '未知';
+}
+
+/* /tmp/dhcp.leases：租约里的主机名（列：到期时间 MAC IP 主机名 ClientID） */
+function parseLeases(txt) {
+	var map = {};
+
+	(txt || '').split(/\r?\n/).forEach(function(l) {
+		var p = l.trim().split(/\s+/);
+
+		if (p.length < 4)
+			return;
+
+		var mac = p[1].toLowerCase(),
+		    ip = p[2],
+		    host = p[3];
+
+		if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac))
+			return;
+
+		map[ip] = { mac: mac, host: host === '*' ? '' : host };
+	});
+
+	return map;
+}
+
+/* /proc/net/arp：邻居 IP / MAC / 网卡 */
+function parseArp(txt) {
+	var arr = [];
+
+	(txt || '').split(/\r?\n/).forEach(function(l) {
+		if (/^IP address/i.test(l))
+			return;
+
+		var p = l.trim().split(/\s+/);
+
+		if (p.length < 6)
+			return;
+
+		var mac = p[3].toLowerCase();
+
+		if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac) || mac === '00:00:00:00:00:00')
+			return;
+
+		arr.push({ ip: p[0], mac: mac, dev: p[5], host: '' });
+	});
+
+	return arr;
+}
+
+/* 按 IP 合并 ARP 邻居与 DHCP 租约，ARP 优先，租约补主机名 */
+function mergeClients(arp, leases) {
+	var byIp = {},
+	    list = [];
+
+	(arp || []).forEach(function(a) { byIp[a.ip] = a; });
+
+	Object.keys(leases || {}).forEach(function(ip) {
+		var l = leases[ip];
+
+		if (!byIp[ip])
+			byIp[ip] = { ip: ip, mac: l.mac, dev: '', host: l.host };
+		else if (!byIp[ip].host)
+			byIp[ip].host = l.host;
+	});
+
+	Object.keys(byIp).forEach(function(k) { list.push(byIp[k]); });
+
+	list.sort(function(a, b) { return a.ip.localeCompare(b.ip, undefined, { numeric: true }); });
+
+	return list;
+}
+
+function devLabel(d) {
+	if (!d)
+		return '—';
+
+	if (/wlan|ra\d|ath|wifi/i.test(d))
+		return '无线';
+
+	if (/eth|br|lan/i.test(d))
+		return '有线';
+
+	return d;
+}
+
 function mib(b) {
 	return (b / 1048576).toFixed(2) + ' MiB';
 }
@@ -401,6 +499,11 @@ return view.extend({
 	parseLoad: parseLoad,
 	parseKernel: parseKernel,
 	cpuCores: cpuCores,
+	parseRelease: parseRelease,
+	parseLeases: parseLeases,
+	parseArp: parseArp,
+	mergeClients: mergeClients,
+	devLabel: devLabel,
 	smooth: smoothPath,
 
 	load: function() {
@@ -416,7 +519,7 @@ return view.extend({
 		    shown = { cpu: 0, memUsed: 0, memCache: 0, memFree: 0, memTotal: 0, dl: 0, ul: 0 },
 		    emaCpu = null, emaDl = null, emaUl = null,
 		    cpuAvg = null, cpu3 = [],
-		    netMax = 0, netName = '', cores = 0,
+		    netMax = 0, netName = '', cores = 0, clients = [],
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
 
@@ -440,6 +543,13 @@ return view.extend({
 			'.home-info{ display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); font-size:12px; }',
 			'.home-info span{ display:block; opacity:.58; margin-bottom:3px; }',
 			'.home-info b{ font-weight:600; font-variant-numeric:tabular-nums; }',
+			'.home-devs{ margin-top:12px; }',
+			'.home-dev{ width:100%; border-collapse:collapse; font-size:12px; }',
+			'.home-dev th{ text-align:left; opacity:.58; font-weight:600; padding:6px 8px; border-bottom:1px solid rgba(0,0,0,.08); }',
+			'.home-dev td{ padding:7px 8px; border-bottom:1px solid rgba(0,0,0,.05); font-variant-numeric:tabular-nums; }',
+			'.home-dev tr:last-child td{ border-bottom:none; }',
+			'.home-dev .mac{ font-family:ui-monospace,Consolas,monospace; letter-spacing:.2px; }',
+			'.home-empty{ opacity:.55; padding:16px 8px; text-align:center; }',
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
 			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
@@ -471,6 +581,8 @@ return view.extend({
 		refs.donutLegend = E('div', { class: 'home-legend' });
 		refs.flashLegend = E('div', { class: 'home-legend' });
 		refs.info = E('div', { class: 'home-info' });
+		refs.devHead = E('div', { class: 'val' }, '—');
+		refs.devTable = E('div', {});
 
 		var root = E('div', { class: 'home' }, [
 			E('style', {}, css),
@@ -515,6 +627,10 @@ return view.extend({
 					E('h4', {}, '设备信息'),
 					refs.info
 				])
+			]),
+			E('div', { class: 'home-card home-devs' }, [
+				E('div', { class: 'home-head' }, [ E('h4', {}, '局域网设备'), refs.devHead ]),
+				refs.devTable
 			])
 		]);
 
@@ -564,6 +680,37 @@ return view.extend({
 
 		paintText();
 
+		var renderClients = function() {
+			refs.devHead.textContent = clients.length ? '在线 ' + clients.length + ' 台' : '暂无设备';
+			refs.devTable.textContent = '';
+
+			if (!clients.length) {
+				refs.devTable.appendChild(E('div', { class: 'home-empty' }, '暂无在线设备（等待 DHCP / ARP 记录）'));
+				return;
+			}
+
+			var tbl = E('table', { class: 'home-dev' }, [
+				E('thead', {}, E('tr', {}, [
+					E('th', {}, '主机名'), E('th', {}, 'IP 地址'), E('th', {}, 'MAC 地址'), E('th', {}, '连接')
+				]))
+			]);
+			var tbody = E('tbody', {});
+
+			clients.forEach(function(c) {
+				tbody.appendChild(E('tr', {}, [
+					E('td', {}, c.host || '—'),
+					E('td', {}, c.ip),
+					E('td', { class: 'mac' }, c.mac),
+					E('td', {}, devLabel(c.dev))
+				]));
+			});
+
+			tbl.appendChild(tbody);
+			refs.devTable.appendChild(tbl);
+		};
+
+		renderClients();
+
 		var poll = function() {
 			var t = clock(),
 			    slow = (slowTick++ % 5) === 0;
@@ -578,7 +725,10 @@ return view.extend({
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/version')),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/device-tree/model')),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/proc/cpuinfo')),
-				statLoaded ? Promise.resolve(null) : safe(fs.read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq'))
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq')),
+				slow ? safe(fs.read('/tmp/dhcp.leases')) : Promise.resolve(null),
+				slow ? safe(fs.read('/proc/net/arp')) : Promise.resolve(null),
+				statLoaded ? Promise.resolve(null) : safe(fs.read('/etc/openwrt_release'))
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -637,6 +787,9 @@ return view.extend({
 					refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
 						return x.toFixed(2);
 					}).join(' / ');
+
+					clients = mergeClients(parseArp(r[11]), parseLeases(r[10]));
+					renderClients();
 				}
 
 				if (rxHist.length) {
@@ -687,7 +840,10 @@ return view.extend({
 						  [ 'CPU 频率', freq > 0 ? freq + ' MHz' + (r[9] && Number(r[9]) > 0 ? '' : '（估算）') : '未知' ],
 						  [ 'CPU 架构', ci.model || '未知' ],
 						  [ 'CPU 核数', String(cores || 1) ],
-						  [ '内核版本', parseKernel(r[6]) ] ].forEach(function(x) {
+						  [ '内核版本', parseKernel(r[6]) ],
+						  [ '运行内存', target.memTotal > 0 ? bytes(target.memTotal) : '—' ],
+						  [ 'Flash 大小', mtd.total > 0 ? bytes(mtd.total) : '—' ],
+						  [ '固件版本', parseRelease(r[12]) ] ].forEach(function(x) {
 						refs.info.appendChild(E('div', {}, [
 							E('span', {}, x[0]),
 							E('b', {}, x[1])
