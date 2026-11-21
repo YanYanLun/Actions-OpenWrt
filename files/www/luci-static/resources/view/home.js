@@ -594,6 +594,29 @@ function drawNetCurve(cv, rx, tx, max, now, dl, ul) {
 	drawSeries(ctx, rect, tx, { stroke: '#10a374', fillTop: 'rgba(16,163,116,.22)', fillBottom: 'rgba(16,163,116,.02)' }, max, now, ul);
 }
 
+function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
+	var a = (a0 + a1) / 2,
+	    cos = Math.cos(a), sin = Math.sin(a),
+	    right = cos >= 0,
+	    x1 = cx + r * cos, y1 = cy + r * sin,
+	    x2 = cx + (r + 11) * cos, y2 = cy + (r + 11) * sin,
+	    x3 = x2 + (right ? 7 : -7);
+
+	ctx.strokeStyle = 'rgba(0,0,0,.28)';
+	ctx.lineWidth = 1;
+	ctx.beginPath();
+	ctx.moveTo(x1, y1);
+	ctx.lineTo(x2, y2);
+	ctx.lineTo(x3, y2);
+	ctx.stroke();
+
+	ctx.fillStyle = 'rgba(0,0,0,.66)';
+	ctx.font = '9px ui-sans-serif,system-ui,sans-serif';
+	ctx.textAlign = right ? 'left' : 'right';
+	ctx.textBaseline = 'middle';
+	ctx.fillText(text, x3 + (right ? 3 : -3), y2);
+}
+
 function drawDonut(cv, segs) {
 	var ctx = fitLayer(cv, 320, 320),
 	    W = 320,
@@ -608,7 +631,7 @@ function drawDonut(cv, segs) {
 
 	var cx = W / 2,
 	    cy = H / 2,
-	    r = Math.min(W, H) / 2 - 6,
+	    r = Math.min(W, H) / 2 - 42,
 	    r0 = r * 0.64,
 	    a0 = -Math.PI / 2;
 
@@ -621,6 +644,9 @@ function drawDonut(cv, segs) {
 		ctx.closePath();
 		ctx.fillStyle = s.c;
 		ctx.fill();
+
+		if (s.name && s.v / total >= 0.04)
+			drawRingLabel(ctx, cx, cy, r, a0, a1, s.name);
 
 		a0 = a1;
 	});
@@ -735,8 +761,7 @@ return view.extend({
 			'.home-shot{ position:relative; height:190px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.home-three{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr); margin-top:12px; }',
-			'.home-dual{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); margin-top:12px; }',
+			'.home-five{ display:grid; gap:12px; grid-template-columns:minmax(0,.72fr) minmax(0,1.08fr) minmax(0,.82fr) minmax(0,.82fr) minmax(0,1.4fr); margin-top:12px; }',
 			'.net-rows{ display:grid; gap:7px; font-size:12px; }',
 			'.net-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
 			'.net-rows span{ opacity:.58; }',
@@ -782,7 +807,7 @@ return view.extend({
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
 			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
-			'.home-donut{ margin:0 auto; width:150px; height:150px; }',
+			'.home-donut{ margin:0 auto; width:100%; max-width:180px; height:180px; }',
 			/* SHORTCUTS:BEGIN */
 			'.home-quick{ display:grid; gap:10px; grid-template-columns:repeat(8,minmax(0,1fr)); margin-bottom:12px; }',
 			'.home-quick a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;',
@@ -795,7 +820,7 @@ return view.extend({
 			'@media (max-width:1100px){ .home-quick{ grid-template-columns:repeat(4,minmax(0,1fr)); } }',
 			/* SHORTCUTS:END */
 			'@media (max-width:1100px){ .home-wifi{ grid-template-columns:minmax(0,1fr); } }',
-			'@media (max-width:820px){ .home-wide, .home-three, .home-dual, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:820px){ .home-wide, .home-five, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -874,7 +899,7 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-three' }, [
+			E('div', { class: 'home-five' }, [
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, 'Flash 存储'),
 					refs.flashVal,
@@ -889,9 +914,7 @@ return view.extend({
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, '网络'),
 					refs.netInfo
-				])
-			]),
-			E('div', { class: 'home-dual' }, [
+				]),
 				E('div', { class: 'home-card' }, [
 					E('div', { class: 'home-head' }, [ E('h4', {}, '网口状态'), refs.portHead ]),
 					refs.portBox
@@ -926,7 +949,7 @@ return view.extend({
 			segs.push({ name: '固件占用', v: flashStat.used, c: '#10a374' });
 			segs.push({ name: '剩余可用', v: flashStat.free, c: 'rgba(128,128,128,.35)' });
 
-			drawDonut(cvFlashDonut, segs.map(function(s) { return { v: s.v, c: s.c }; }));
+			drawDonut(cvFlashDonut, segs.map(function(s) { return { v: s.v, c: s.c, name: s.name }; }));
 
 			refs.flashLegend.textContent = '';
 			segs.forEach(function(s) {
