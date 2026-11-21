@@ -19,6 +19,8 @@ var PAD = { l: 14, r: 12, t: 10, b: 12 };
 var PAGE_TITLE = '首页';
 
 var callSystemInfo = rpc.declare({ object: 'system', method: 'info' });
+var callNetDump = rpc.declare({ object: 'network.interface', method: 'dump' });
+var callNetDevs = rpc.declare({ object: 'luci-rpc', method: 'getNetworkDevices' });
 
 function parseCpu(txt) {
 	var m = (txt || '').match(/(?:^|\n)cpu\s+([^\n]+)/);
@@ -97,6 +99,75 @@ function parseNet(txt) {
 	});
 
 	return best;
+}
+
+function ifcCidr(ifc) {
+	var a = ifc && ifc['ipv4-address'];
+	return (Array.isArray(a) && a.length && a[0].address) ? a[0].address + '/' + a[0].mask : null;
+}
+
+function ifcGw(ifc) {
+	var rt = ifc && ifc.route;
+	if (Array.isArray(rt))
+		for (var i = 0; i < rt.length; i++)
+			if (rt[i] && rt[i].target === '0.0.0.0' && rt[i].mask === 0 && rt[i].nexthop)
+				return rt[i].nexthop;
+	return null;
+}
+
+function ifcDns(ifc) {
+	var d = ifc && ifc.dns;
+	return Array.isArray(d) ? d : [];
+}
+
+function speedText(p) {
+	if (!p.carrier) return '—';
+	if (!p.speed || p.speed < 0) return '已连接';
+	if (p.speed >= 1000) return (p.speed / 1000).toFixed(p.speed % 1000 ? 1 : 0) + ' Gbps';
+	return p.speed + ' Mbps';
+}
+
+function portIcon(up) {
+	var c = up ? '#10a374' : '#c0c6cf';
+	return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="' + c +
+		'" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+		'<rect x="4" y="5" width="16" height="11" rx="2"/>' +
+		'<path d="M8 16v3M12 16v3M16 16v3"/>' +
+		'<path d="M8 9h8"/></svg>';
+}
+
+function pickPorts(devs, wanDev, lanDev) {
+	var skip = /^(lo|wlan|tun|tap|ppp|wwan|gre|vti|wireguard|6to4|sit|ip6tnl|bat)/i,
+		ports = [], seen = {};
+
+	function add(name, role) {
+		if (!name || seen[name]) return;
+		var d = devs[name] || {};
+		if (d.type === 'wifi') return;
+		seen[name] = true;
+		var link = d.link || {};
+		ports.push({ name: name, role: role, carrier: !!link.carrier, speed: link.speed, duplex: link.duplex });
+	}
+
+	/* LAN 若是网桥，落到网桥下属的物理网口上取链路状态 */
+	var lanPhys = lanDev;
+	if (lanDev && (devs[lanDev] || {}).type === 'bridge') {
+		var phys = Object.keys(devs).filter(function(n) { return devs[n].bridge === lanDev; })[0];
+		if (phys) lanPhys = phys;
+	}
+
+	add(wanDev, 'WAN');
+	add(lanPhys, 'LAN');
+
+	Object.keys(devs).forEach(function(name) {
+		if (skip.test(name)) return;
+		var d = devs[name] || {};
+		if (d.type === 'bridge' || d.type === 'wifi' || d.type === 'tunnel') return;
+		if (!/^(eth|switch|port|wan|lan)/i.test(name)) return;
+		add(name, null);
+	});
+
+	return ports;
 }
 
 function parseMtd(txt) {
@@ -648,6 +719,7 @@ return view.extend({
 		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0, clients = [],
 		    mtdTotal = 0, mtdParts = [], flashStat = { used: 0, free: 0, total: 0 },
+		    netInfo = { lan: '—', wan: '—', gw: '—', dns: '—' }, portList = [],
 		    radios = [], wifiMac = {}, last = { netDev: '' },
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
@@ -663,7 +735,18 @@ return view.extend({
 			'.home-shot{ position:relative; height:190px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.home-three{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr); margin-top:12px; }',
+			'.home-four{ display:grid; gap:12px; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:12px; }',
+			'.net-rows{ display:grid; gap:7px; font-size:12px; }',
+			'.net-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
+			'.net-rows span{ opacity:.58; }',
+			'.net-rows b{ font-weight:600; font-variant-numeric:tabular-nums; text-align:right; font-family:ui-monospace,Consolas,monospace; }',
+			'.port-box{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }',
+			'.port-tile{ flex:1; min-width:62px; border:1px solid rgba(0,0,0,.08); border-radius:8px; padding:8px 6px; text-align:center; }',
+			'.port-tile .p-icon{ line-height:0; margin-bottom:6px; }',
+			'.port-tile .p-name{ font-size:11px; opacity:.7; margin-bottom:2px; }',
+			'.port-tile .p-speed{ font-size:11px; font-variant-numeric:tabular-nums; }',
+			'.port-tile.up .p-speed{ color:#10a374; }',
+			'.port-tile.down .p-speed{ opacity:.5; }',
 			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
 			'.wifi-radio{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
 			'.wifi-top{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }',
@@ -709,7 +792,8 @@ return view.extend({
 			'.home-quick span{ font-size:12px; white-space:nowrap; }',
 			'@media (max-width:1100px){ .home-quick{ grid-template-columns:repeat(4,minmax(0,1fr)); } }',
 			/* SHORTCUTS:END */
-			'@media (max-width:820px){ .home-wide, .home-three, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:1100px){ .home-wifi{ grid-template-columns:minmax(0,1fr); } }',
+			'@media (max-width:820px){ .home-wide, .home-four, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -736,6 +820,8 @@ return view.extend({
 		refs.donutLegend = E('div', { class: 'home-legend' });
 		refs.flashLegend = E('div', { class: 'home-legend' });
 		refs.info = E('div', { class: 'home-info' });
+		refs.netInfo = E('div', { class: 'net-rows' });
+		refs.portBox = E('div', { class: 'port-box' });
 
 		/* SHORTCUTS:BEGIN */
 		var quick = E('div', { class: 'home-quick' }, SHORTCUTS.map(function(s) {
@@ -785,7 +871,7 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-three' }, [
+			E('div', { class: 'home-four' }, [
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, 'Flash 存储'),
 					refs.flashVal,
@@ -796,6 +882,12 @@ return view.extend({
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, '设备信息'),
 					refs.info
+				]),
+				E('div', { class: 'home-card' }, [
+					E('h4', {}, '网络'),
+					refs.netInfo,
+					E('h4', { style: 'margin-top:12px' }, '网口状态'),
+					refs.portBox
 				]),
 				E('div', { class: 'home-card' }, [
 					E('div', { class: 'home-head' }, [ E('h4', {}, '无线网络'), refs.wifiHead ]),
@@ -962,6 +1054,31 @@ return view.extend({
 
 		renderWireless();
 
+		var renderNet = function() {
+			refs.netInfo.textContent = '';
+			[ [ 'LAN', netInfo.lan ], [ 'WAN', netInfo.wan ], [ '网关', netInfo.gw ], [ 'DNS', netInfo.dns ] ].forEach(function(x) {
+				refs.netInfo.appendChild(E('div', { class: 'row' }, [
+					E('span', {}, x[0]), E('b', {}, x[1])
+				]));
+			});
+
+			refs.portBox.textContent = '';
+			if (!portList.length) {
+				refs.portBox.appendChild(E('div', { class: 'home-empty' }, '未检测到有线网口'));
+				return;
+			}
+
+			portList.forEach(function(p) {
+				var ico = E('div', { class: 'p-icon' });
+				ico.innerHTML = portIcon(p.carrier);
+				refs.portBox.appendChild(E('div', { class: 'port-tile ' + (p.carrier ? 'up' : 'down') }, [
+					ico,
+					E('div', { class: 'p-name' }, p.role || p.name),
+					E('div', { class: 'p-speed' }, speedText(p))
+				]));
+			});
+		};
+
 		var poll = function() {
 			var t = clock(),
 			    slow = (slowTick++ % 5) === 0;
@@ -981,7 +1098,9 @@ return view.extend({
 				slow ? safe(fs.read('/proc/net/arp')) : Promise.resolve(null),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/etc/openwrt_release')),
 				slow ? safe(fs.read('/etc/config/wireless')) : Promise.resolve(null),
-				slow ? safe(callSystemInfo()) : Promise.resolve(null)
+				slow ? safe(callSystemInfo()) : Promise.resolve(null),
+				slow ? safe(callNetDump()) : Promise.resolve(null),
+				slow ? safe(callNetDevs()) : Promise.resolve(null)
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -1062,6 +1181,22 @@ return view.extend({
 					});
 
 					renderWireless();
+
+					var dump = Array.isArray(r[15]) ? r[15] : [],
+						byName = {};
+					dump.forEach(function(i) { if (i && i.interface) byName[i.interface] = i; });
+
+					var lanIf = byName.lan, wanIf = byName.wan;
+					netInfo.lan = ifcCidr(lanIf) || '—';
+					netInfo.wan = ifcCidr(wanIf) || (wanIf && wanIf.up ? '已连接' : '未连接');
+					netInfo.gw = ifcGw(wanIf) || ifcGw(lanIf) || '—';
+					netInfo.dns = ifcDns(wanIf).concat(ifcDns(lanIf))
+						.filter(function(v, i, a) { return a.indexOf(v) === i; })
+						.join(' / ') || '—';
+
+					var devs = (r[16] && typeof r[16] === 'object') ? r[16] : {};
+					portList = pickPorts(devs, wanIf && wanIf.l3_device, lanIf && lanIf.l3_device);
+					renderNet();
 
 					Promise.all(radios.map(function(rd) {
 						return rd.ifname ? safe(fs.read('/sys/class/net/' + rd.ifname + '/address')) : Promise.resolve('');

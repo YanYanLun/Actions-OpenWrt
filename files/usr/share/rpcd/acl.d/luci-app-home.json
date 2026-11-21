@@ -1,6 +1,6 @@
 {
 	"luci-app-home": {
-		"description": "首页：读取 /proc 统计、无线配置与系统存储用量（system.info）",
+		"description": "首页：读取 /proc 统计、无线配置、系统存储用量与网络接口/网口状态",
 		"read": {
 			"file": {
 				"/proc/stat": [
@@ -52,6 +52,12 @@
 			"ubus": {
 				"system": [
 					"info"
+				],
+				"network.interface": [
+					"dump"
+				],
+				"luci-rpc": [
+					"getNetworkDevices"
 				]
 			}
 		}
