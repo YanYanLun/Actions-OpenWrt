@@ -45,6 +45,9 @@
 				"/etc/config/wireless": [
 					"read"
 				],
+				"/etc/config/network": [
+					"read"
+				],
 				"/sys/class/net/": [
 					"read"
 				]

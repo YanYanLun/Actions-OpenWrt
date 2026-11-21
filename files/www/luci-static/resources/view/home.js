@@ -136,36 +136,26 @@ function portIcon(up) {
 		'<path d="M8 9h8"/></svg>';
 }
 
-function pickPorts(devs, wanDev, lanDev) {
-	var skip = /^(lo|wlan|tun|tap|ppp|wwan|gre|vti|wireguard|6to4|sit|ip6tnl|bat)/i,
-		ports = [], seen = {};
+function pickPorts(devs, wanDev, lanDev, wanN, lanN) {
+	var ports = [];
 
-	function add(name, role) {
-		if (!name || seen[name]) return;
-		var d = devs[name] || {};
-		if (d.type === 'wifi') return;
-		seen[name] = true;
-		var link = d.link || {};
-		ports.push({ name: name, role: role, carrier: !!link.carrier, speed: link.speed, duplex: link.duplex });
-	}
+	function linkOf(name) { return (devs[name] || {}).link || {}; }
 
-	/* LAN 若是网桥，落到网桥下属的物理网口上取链路状态 */
+	/* LAN 若是网桥，落到网桥下属的成员口上取链路状态 */
 	var lanPhys = lanDev;
 	if (lanDev && (devs[lanDev] || {}).type === 'bridge') {
 		var phys = Object.keys(devs).filter(function(n) { return devs[n].bridge === lanDev; })[0];
 		if (phys) lanPhys = phys;
 	}
 
-	add(wanDev, 'WAN');
-	add(lanPhys, 'LAN');
+	var wanLink = linkOf(wanDev),
+		lanLink = linkOf(lanPhys);
 
-	Object.keys(devs).forEach(function(name) {
-		if (skip.test(name)) return;
-		var d = devs[name] || {};
-		if (d.type === 'bridge' || d.type === 'wifi' || d.type === 'tunnel') return;
-		if (!/^(eth|switch|port|wan|lan)/i.test(name)) return;
-		add(name, null);
-	});
+	for (var i = 0; i < wanN; i++)
+		ports.push({ name: 'WAN' + (wanN > 1 ? (i + 1) : ''), role: 'WAN', carrier: !!wanLink.carrier, speed: wanLink.speed, duplex: wanLink.duplex });
+
+	for (var j = 0; j < lanN; j++)
+		ports.push({ name: 'LAN' + (lanN > 1 ? (j + 1) : ''), role: 'LAN', carrier: !!lanLink.carrier, speed: lanLink.speed, duplex: lanLink.duplex });
 
 	return ports;
 }
@@ -370,6 +360,54 @@ function parseWireless(txt) {
 	});
 
 	return radios;
+}
+
+/* /etc/config/network：按 switch_vlan 统计 WAN/LAN 物理口数量（剔除 CPU 口 tagged） */
+function parseSwitchPorts(txt) {
+	var sections = [], cur = null;
+
+	(txt || '').split(/\r?\n/).forEach(function(l) {
+		var cfg = l.match(/^config\s+(\S+)\s+(?:'([^']*)'|(\S+))/);
+
+		if (cfg) {
+			cur = { type: cfg[1], name: cfg[2] || cfg[3] || '', opts: {} };
+			sections.push(cur);
+			return;
+		}
+
+		if (!cur)
+			return;
+
+		var opt = l.match(/^\s*option\s+(\S+)\s+(?:'([^']*)'|"([^"]*)"|(\S+))/);
+
+		if (opt)
+			cur.opts[opt[1]] = opt[2] !== undefined ? opt[2] : (opt[3] !== undefined ? opt[3] : opt[4]);
+	});
+
+	var ifDev = {}, vlans = [];
+
+	sections.forEach(function(s) {
+		if (s.type === 'interface')
+			ifDev[s.name] = s.opts.device || '';
+		else if (s.type === 'switch_vlan')
+			vlans.push(s.opts);
+	});
+
+	function vid(d) { var m = (d || '').match(/\.(\d+)$/); return m ? m[1] : null; }
+
+	var wanVid = vid(ifDev.wan), lanVid = vid(ifDev.lan), out = { wan: 0, lan: 0 };
+
+	function phys(p) {
+		return (p || '').split(/\s+/).filter(function(x) { return x && !/t$/i.test(x); });
+	}
+
+	vlans.forEach(function(v) {
+		var n = phys(v.ports).length;
+		if (v.vlan === wanVid) out.wan = n;
+		else if (v.vlan === lanVid) out.lan = n;
+	});
+
+	return out;
 }
 
 /* /proc/net/dev 里的无线网卡名（按名称排序，与 radio 顺序对齐） */
@@ -599,7 +637,7 @@ function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
 	    cos = Math.cos(a), sin = Math.sin(a),
 	    right = cos >= 0,
 	    x1 = cx + r * cos, y1 = cy + r * sin,
-	    x2 = cx + (r + 11) * cos, y2 = cy + (r + 11) * sin,
+	    x2 = cx + (r + 14) * cos, y2 = cy + (r + 14) * sin,
 	    x3 = x2 + (right ? 7 : -7);
 
 	ctx.strokeStyle = 'rgba(0,0,0,.28)';
@@ -611,7 +649,7 @@ function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
 	ctx.stroke();
 
 	ctx.fillStyle = 'rgba(0,0,0,.66)';
-	ctx.font = '9px ui-sans-serif,system-ui,sans-serif';
+	ctx.font = '12px ui-sans-serif,system-ui,sans-serif';
 	ctx.textAlign = right ? 'left' : 'right';
 	ctx.textBaseline = 'middle';
 	ctx.fillText(text, x3 + (right ? 3 : -3), y2);
@@ -645,7 +683,7 @@ function drawDonut(cv, segs) {
 		ctx.fillStyle = s.c;
 		ctx.fill();
 
-		if (s.name && s.v / total >= 0.04)
+		if (s.name && s.v / total >= 0.015)
 			drawRingLabel(ctx, cx, cy, r, a0, a1, s.name);
 
 		a0 = a1;
@@ -745,7 +783,7 @@ return view.extend({
 		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0, clients = [],
 		    mtdTotal = 0, mtdParts = [], flashStat = { used: 0, free: 0, total: 0 },
-		    netInfo = { lan: '—', wan: '—', gw: '—', dns: '—' }, portList = [],
+		    netInfo = { lan: '—', wan: '—', gw: '—', dns: '—' }, portList = [], switchPorts = { wan: 1, lan: 1 },
 		    radios = [], wifiMac = {}, last = { netDev: '' },
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
@@ -761,7 +799,8 @@ return view.extend({
 			'.home-shot{ position:relative; height:190px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.home-five{ display:grid; gap:12px; grid-template-columns:minmax(0,.72fr) minmax(0,1.08fr) minmax(0,.82fr) minmax(0,.82fr) minmax(0,1.4fr); margin-top:12px; }',
+			'.home-main{ display:grid; gap:12px; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.25fr); margin-top:12px; }',
+			'.home-stack{ display:grid; gap:12px; align-content:start; }',
 			'.net-rows{ display:grid; gap:7px; font-size:12px; }',
 			'.net-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
 			'.net-rows span{ opacity:.58; }',
@@ -807,7 +846,7 @@ return view.extend({
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
 			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
-			'.home-donut{ margin:0 auto; width:100%; max-width:180px; height:180px; }',
+			'.home-donut{ margin:0 auto; width:100%; max-width:210px; height:210px; }',
 			/* SHORTCUTS:BEGIN */
 			'.home-quick{ display:grid; gap:10px; grid-template-columns:repeat(8,minmax(0,1fr)); margin-bottom:12px; }',
 			'.home-quick a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;',
@@ -820,7 +859,7 @@ return view.extend({
 			'@media (max-width:1100px){ .home-quick{ grid-template-columns:repeat(4,minmax(0,1fr)); } }',
 			/* SHORTCUTS:END */
 			'@media (max-width:1100px){ .home-wifi{ grid-template-columns:minmax(0,1fr); } }',
-			'@media (max-width:820px){ .home-wide, .home-five, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:820px){ .home-wide, .home-main, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -899,7 +938,7 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-five' }, [
+			E('div', { class: 'home-main' }, [
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, 'Flash 存储'),
 					refs.flashVal,
@@ -911,13 +950,15 @@ return view.extend({
 					E('h4', {}, '设备信息'),
 					refs.info
 				]),
-				E('div', { class: 'home-card' }, [
-					E('h4', {}, '网络'),
-					refs.netInfo
-				]),
-				E('div', { class: 'home-card' }, [
-					E('div', { class: 'home-head' }, [ E('h4', {}, '网口状态'), refs.portHead ]),
-					refs.portBox
+				E('div', { class: 'home-stack' }, [
+					E('div', { class: 'home-card' }, [
+						E('h4', {}, '网络'),
+						refs.netInfo
+					]),
+					E('div', { class: 'home-card' }, [
+						E('div', { class: 'home-head' }, [ E('h4', {}, '网口状态'), refs.portHead ]),
+						refs.portBox
+					])
 				]),
 				E('div', { class: 'home-card' }, [
 					E('div', { class: 'home-head' }, [ E('h4', {}, '无线网络'), refs.wifiHead ]),
@@ -1107,7 +1148,7 @@ return view.extend({
 				ico.innerHTML = portIcon(p.carrier);
 				refs.portBox.appendChild(E('div', { class: 'port-tile ' + (p.carrier ? 'up' : 'down') }, [
 					ico,
-					E('div', { class: 'p-name' }, p.role || p.name),
+					E('div', { class: 'p-name' }, p.name),
 					E('div', { class: 'p-state' }, p.carrier ? '在用' : '空闲'),
 					E('div', { class: 'p-speed' }, p.carrier ? speedText(p) : '无链路')
 				]));
@@ -1135,7 +1176,8 @@ return view.extend({
 				slow ? safe(fs.read('/etc/config/wireless')) : Promise.resolve(null),
 				slow ? safe(callSystemInfo()) : Promise.resolve(null),
 				slow ? safe(callNetDump()) : Promise.resolve(null),
-				slow ? safe(callNetDevs()) : Promise.resolve(null)
+				slow ? safe(callNetDevs()) : Promise.resolve(null),
+				slow ? safe(fs.read('/etc/config/network')) : Promise.resolve(null)
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -1230,8 +1272,12 @@ return view.extend({
 						.filter(function(v, i, a) { return a.indexOf(v) === i; })
 						.join(' / ') || '—';
 
+					var sw = parseSwitchPorts(r[17]);
+					switchPorts.wan = sw.wan || 1;
+					switchPorts.lan = sw.lan || 1;
+
 					var devs = (r[16] && typeof r[16] === 'object') ? r[16] : {};
-					portList = pickPorts(devs, wanIf && wanIf.l3_device, lanIf && lanIf.l3_device);
+					portList = pickPorts(devs, wanIf && wanIf.l3_device, lanIf && lanIf.l3_device, switchPorts.wan, switchPorts.lan);
 					renderNet();
 
 					Promise.all(radios.map(function(rd) {
