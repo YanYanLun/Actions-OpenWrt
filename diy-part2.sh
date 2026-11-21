@@ -10,7 +10,7 @@
 # See /LICENSE for more information.
 #
 # ---------------------------------------------------------------------------
-# 本项目改动：HiWiFi HC5761 换装 32MB SPI Flash 的分区适配
+# 本项目改动：HiWiFi HC5761 换装 64MB SPI Flash 的分区适配
 #
 # 上游（ImmortalWrt openwrt-23.05）HC5761 的 16MB 布局：
 #   u-boot    0x000000 0x030000  (192K)
@@ -21,40 +21,43 @@
 #   bdinfo    0xFE0000 0x010000
 #   backup    0xFF0000 0x010000
 #
-# 本脚本生成的 32MB 布局：
+# 本脚本生成的 64MB 布局：
 #   u-boot / hw_panic / factory 三段位置完全不动
 #     —— Breed 的 u-boot(0x0) 与 art(0x40000) 备份位置必须保持不变，
 #        动了就会刷完不认 art、没有 MAC、没有无线
-#   firmware  0x050000 0x1FB0000 -> 到 0x2000000（整 32MB）结束
-#   同时把 mt7620.mk 里 hiwifi_hc5761 的 IMAGE_SIZE 改成 32448k，
+#   firmware  0x050000 0x3FB0000 -> 到 0x4000000（整 64MB）结束
+#   同时把 mt7620.mk 里 hiwifi_hc5761 的 IMAGE_SIZE 改成 65216k，
 #   否则镜像大小校验还按 16MB 那套走。
 #
 # 注意：分区定义在共用文件 mt7620a_hiwifi_hc5x61.dtsi 里（hc5661/hc5761 共用），
-#      所以这里复制一份新的 32M dtsi，只让 hc5761 引用它，不改上游原文件。
+#      所以这里复制一份新的 64M dtsi，只让 hc5761 引用它，不改上游原文件。
 #
 # ---------------------------------------------------------------------------
-# 另外修一个 32MB 专属问题：软重启卡死（灯不亮、Breed 起不来，只能断电恢复）
+# 另外修一个 >16MB Flash 专属问题：软重启卡死（灯不亮、Breed 起不来，只能断电恢复）
 #
 # 原因链（kernel 5.15 drivers/mtd/spi-nor）：
-#   1. flash 识别成 w25q256（JEDEC 0xef4019）。这个 ID 对应两种片子：
-#      - W25Q256JV：SFDP 是 JESD216A，内核置 SNOR_F_4B_OPCODES，用 4B 指令码读写，不进模式
-#      - W25Q256FV：没有 4B 指令码，spi_nor_init 会发 0xB7(EN4B) 让整片进入 4 字节地址模式
-#   2. 这个模式是易失状态，只有断电才复位；reboot 时 Breed 用 3 字节命令读，直接读不到
+#   1. flash 容量超过 16MB，内核走 4 字节地址模式。部分片子（如 W25Q256FV /
+#      W25Q512 一类）没有 4B 指令码，spi_nor_init 会发 0xB7(EN4B) 让整片
+#      进入 4 字节地址模式
+#   2. 这个模式是易失状态，只有断电才复位；reboot 时 Breed 用 3 字节命令读，
+#      直接读不到
 #   3. 内核本来有退出函数 spi_nor_restore()（shutdown/remove 时调用），但条件是
 #        addr_width==4 && !SNOR_F_4B_OPCODES && SNOR_F_BROKEN_RESET
-#      SNOR_F_BROKEN_RESET 只来自 DTS 的 broken-flash-reset 属性 —— 上游 DTS 没写，所以从不退出
-#   4. Winbond 的退出实现还会补一步“清 EAR=0”：FV 版退出 4B 后扩展地址寄存器残留 1，
-#      会让所有 3 字节读都落到后半片（这本身就是个起不来的坑）
+#      SNOR_F_BROKEN_RESET 只来自 DTS 的 broken-flash-reset 属性 —— 上游 DTS 没写，
+#      所以从不退出
+#   4. Winbond 的退出实现还会补一步“清 EAR=0”：FV 版退出 4B 后扩展地址寄存器
+#      残留 1，会让所有 3 字节读都落到后半片（这本身就是个起不来的坑）
 #
-# 所以补丁就是在 flash@0 节点里加一行 broken-flash-reset;，让 reboot 前自动发 0xE9 + 清 EAR。
-# 不改内核源码，零编译风险；开机 dmesg 会多一条 WARN（enabling reset hack），属正常提示。
+# 所以补丁就是在 flash@0 节点里加一行 broken-flash-reset;，让 reboot 前自动发
+# 0xE9 + 清 EAR。不改内核源码，零编译风险；开机 dmesg 会多一条 WARN（enabling
+# reset hack），属正常提示。
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 DTS_DIR=target/linux/ramips/dts
 DEV_DTS=$DTS_DIR/mt7620a_hiwifi_hc5761.dts
 SRC_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61.dtsi
-DST_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61-32m.dtsi
+DST_DTSI=$DTS_DIR/mt7620a_hiwifi_hc5x61-64m.dtsi
 IMAGE_MK=target/linux/ramips/image/mt7620.mk
 
 echo "=== [1/5] 检查源码结构 ==="
@@ -66,7 +69,7 @@ for f in "$DEV_DTS" "$SRC_DTSI" "$IMAGE_MK"; do
     fi
 done
 
-echo "=== [2/5] 复制分区定义并改成 32MB 布局 ==="
+echo "=== [2/5] 复制分区定义并改成 64MB 布局 ==="
 cp "$SRC_DTSI" "$DST_DTSI"
 
 python3 - "$DST_DTSI" <<'PY'
@@ -74,9 +77,9 @@ import re
 import sys
 import pathlib
 
-FLASH_SIZE = 0x2000000   # 32MB
+FLASH_SIZE = 0x4000000   # 64MB
 FW_START = 0x50000       # 与上游 firmware 起始偏移保持一致
-FW_SIZE = FLASH_SIZE - FW_START   # 0x1FB0000
+FW_SIZE = FLASH_SIZE - FW_START   # 0x3FB0000
 
 path = pathlib.Path(sys.argv[1])
 lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
@@ -123,7 +126,7 @@ factory = [p for p in parts if p['label'] == 'factory']
 if len(factory) != 1 or factory[0]['addr'] != 0x40000:
     sys.exit('!! factory(art) 分区不在 0x40000，Breed 的 art 位置会错位，终止')
 
-# 1) 重写 firmware 的 reg 为 32MB 大小
+# 1) 重写 firmware 的 reg 为 64MB 大小
 hit = None
 for k in range(fw[0]['start'], fw[0]['end'] + 1):
     m = REG_RE.search(lines[k])
@@ -143,7 +146,7 @@ for p in sorted(drop, key=lambda b: b['start'], reverse=True):
 
 # 3) 给 flash@0 节点加 broken-flash-reset
 #    让内核在 shutdown/reboot 时走 spi_nor_restore()：发 0xE9 退出 4 字节地址模式 + 清 EAR。
-#    没有这个属性，W25Q256FV 这类片子会一直停在 4B 模式，软重启后 Breed 读不到 flash。
+#    没有这个属性，4B 模式的片子会一直停在 4B 模式，软重启后 Breed 读不到 flash。
 joined = ''.join(lines)
 if 'broken-flash-reset' in joined:
     print('    broken-flash-reset 已存在，跳过')
@@ -164,9 +167,9 @@ else:
 
 new_text = ''.join(lines)
 
-# 4) 校验：不重叠 + 正好铺满 32MB + firmware 尺寸正确
+# 4) 校验：不重叠 + 正好铺满 64MB + firmware 尺寸正确
 new_parts = parse(new_text.splitlines(keepends=True))
-print('    32MB 分区表：')
+print('    64MB 分区表：')
 prev = 0
 for p in sorted(new_parts, key=lambda b: b['off'] if b['off'] is not None else 1 << 40):
     if p['off'] is None or p['size'] is None:
@@ -177,17 +180,17 @@ for p in sorted(new_parts, key=lambda b: b['off'] if b['off'] is not None else 1
     print('      %-9s 0x%08x - 0x%08x  (%dK)' % (p['label'], p['off'], prev, p['size'] // 1024))
 
 if prev != FLASH_SIZE:
-    sys.exit('!! 分区表总长 0x%x，不是整 32MB（0x%x），终止' % (prev, FLASH_SIZE))
+    sys.exit('!! 分区表总长 0x%x，不是整 64MB（0x%x），终止' % (prev, FLASH_SIZE))
 
 fw2 = [p for p in new_parts if p['label'] == 'firmware'][0]
 if fw2['off'] != FW_START or fw2['size'] != FW_SIZE:
     sys.exit('!! firmware 分区不是 0x%x + 0x%x，终止' % (FW_START, FW_SIZE))
 
 path.write_text(new_text, encoding='utf-8')
-print('    32M 分区定义写入成功：%s' % path.name)
+print('    64M 分区定义写入成功：%s' % path.name)
 PY
 
-echo "=== [3/5] 让 HC5761 引用 32M 分区定义 ==="
+echo "=== [3/5] 让 HC5761 引用 64M 分区定义 ==="
 python3 - "$DEV_DTS" "$DST_DTSI" <<'PY'
 import sys
 import pathlib
@@ -208,7 +211,7 @@ import re
 import sys
 import pathlib
 
-IMAGE_SIZE_K = 32448   # = 0x1FB0000 / 1024，与 32M firmware 分区大小严格一致
+IMAGE_SIZE_K = 65216   # = 0x3FB0000 / 1024，与 64M firmware 分区大小严格一致
 
 mk = pathlib.Path(sys.argv[1])
 text = mk.read_text(encoding='utf-8')
@@ -235,13 +238,13 @@ echo "=== [5/5] 回读校验（任何一项不对直接失败，不浪费编译�
 DST_NAME=$(basename "$DST_DTSI")
 
 grep -q 'broken-flash-reset;' "$DST_DTSI" \
-    || { echo "!! 32M dtsi 里没有 broken-flash-reset（软重启会卡死）"; exit 1; }
-grep -q 'reg = <0x50000 0x1fb0000>;' "$DST_DTSI" \
-    || { echo "!! firmware 分区 reg 不是 0x50000 + 0x1fb0000"; exit 1; }
+    || { echo "!! 64M dtsi 里没有 broken-flash-reset（软重启会卡死）"; exit 1; }
+grep -q 'reg = <0x50000 0x3fb0000>;' "$DST_DTSI" \
+    || { echo "!! firmware 分区 reg 不是 0x50000 + 0x3fb0000"; exit 1; }
 grep -q "#include \"$DST_NAME\"" "$DEV_DTS" \
     || { echo "!! hc5761.dts 没有引用 $DST_NAME"; exit 1; }
-sed -n '/define Device\/hiwifi_hc5761/,/endef/p' "$IMAGE_MK" | grep -q 'IMAGE_SIZE := 32448k' \
-    || { echo "!! mt7620.mk 里 hc5761 的 IMAGE_SIZE 不是 32448k"; exit 1; }
+sed -n '/define Device\/hiwifi_hc5761/,/endef/p' "$IMAGE_MK" | grep -q 'IMAGE_SIZE := 65216k' \
+    || { echo "!! mt7620.mk 里 hc5761 的 IMAGE_SIZE 不是 65216k"; exit 1; }
 
-echo "=== 32M 补丁全部完成 ==="
-echo "firmware 分区 = 0x50000 ~ 0x2000000，IMAGE_SIZE = 32448k，broken-flash-reset 已写入"
+echo "=== 64M 补丁全部完成 ==="
+echo "firmware 分区 = 0x50000 ~ 0x4000000，IMAGE_SIZE = 65216k，broken-flash-reset 已写入"

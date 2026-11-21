@@ -2,7 +2,7 @@
 # https://github.com/P3TERX/Actions-OpenWrt
 #
 # File: .github/workflows/openwrt-builder.yml
-# Description: Build ImmortalWrt (HiWiFi HC5761, 32MB Flash) using GitHub Actions
+# Description: Build ImmortalWrt (HiWiFi HC5761, 64MB Flash) using GitHub Actions
 #
 # Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
 #
@@ -24,7 +24,7 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  # 目标设备（HC5761），32M 分区补丁在 diy-part2.sh 里打
+  # 目标设备（HC5761），64M 分区补丁在 diy-part2.sh 里打
   TARGET_DEVICE: hiwifi_hc5761
   # ccache：第二次及以后的编译省掉大部分时间，节约 Actions 免费额度
   USE_CCACHE: true
@@ -87,18 +87,18 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    # 32M 补丁打完后先自检一遍，避免白跑 3 小时
-    - name: Verify 32M patch
+    # 64M 补丁打完后先自检一遍，避免白跑 3 小时
+    - name: Verify 64M patch
       run: |
         cd openwrt
         echo "--- 目标设备 ---"
         grep -E '^CONFIG_TARGET_(ramips|ramips_mt7620|ramips_mt7620_DEVICE_hiwifi_hc5761)=' .config
-        echo "--- IMAGE_SIZE（HC5761 应为 32448k）---"
+        echo "--- IMAGE_SIZE（HC5761 应为 65216k）---"
         sed -n '/define Device\/hiwifi_hc5761/,/endef/p' target/linux/ramips/image/mt7620.mk | grep -E 'IMAGE_SIZE|DEVICE_MODEL'
-        echo "--- 32M 分区表 ---"
-        cat target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-32m.dtsi
+        echo "--- 64M 分区表 ---"
+        cat target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-64m.dtsi
         echo "--- 软重启修复（broken-flash-reset 必须恰好 1 处）---"
-        test "$(grep -c 'broken-flash-reset;' target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-32m.dtsi)" -eq 1
+        test "$(grep -c 'broken-flash-reset;' target/linux/ramips/dts/mt7620a_hiwifi_hc5x61-64m.dtsi)" -eq 1
         echo "--- HC5761 dts 引用 ---"
         grep -n '#include' target/linux/ramips/dts/mt7620a_hiwifi_hc5761.dts
 
@@ -175,9 +175,9 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "设备：HiWiFi HC5761（32MB Flash 改造）" >> release.txt
+        echo "设备：HiWiFi HC5761（64MB Flash 改造）" >> release.txt
         echo "源码：ImmortalWrt $REPO_BRANCH" >> release.txt
-        echo "分区：u-boot 0x0 / hw_panic 0x30000 / factory(art) 0x40000 / firmware 0x50000-0x2000000" >> release.txt
+        echo "分区：u-boot 0x0 / hw_panic 0x30000 / factory(art) 0x40000 / firmware 0x50000-0x4000000" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release

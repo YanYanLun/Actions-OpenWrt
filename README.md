@@ -1,8 +1,8 @@
-# HC5761 换 32MB Flash —— ImmortalWrt 自编译（GitHub Actions）
+# HC5761 换 64MB Flash —— ImmortalWrt 自编译（GitHub Actions）
 
-HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub Actions 自编译 ImmortalWrt 23.05 的完整流程：分区补丁、编译触发、Breed 刷写、验收命令、软重启修复、LuCI 主题与插件，全部已验证。
+HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 64MB 后，用 GitHub Actions 自编译 ImmortalWrt 23.05 的完整流程：分区补丁、编译触发、Breed 刷写、验收命令、软重启修复、LuCI 主题与插件，全部已验证。
 
-**结论先行**：本仓库的 Actions 直接 Run 一次即可产出可刷的 `sysupgrade.bin`（同尺寸 32M → 32M 可直接网页升级，跨尺寸必须进 Breed）。
+**结论先行**：本仓库的 Actions 直接 Run 一次即可产出可刷的 `sysupgrade.bin`（同尺寸 64M → 64M 可直接网页升级，跨尺寸必须进 Breed）。
 
 ## 目录
 
@@ -14,12 +14,12 @@ HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 
 | 文件 | 改动 |
 | --- | --- |
-| `.github/workflows/openwrt-builder.yml` | 源码从 `coolsnowwolf/lede` 换成 `immortalwrt/immortalwrt` + `openwrt-23.05`；加 ccache 缓存、加"32M 补丁自检"步骤、加超时保护 |
-| `diy-part2.sh` | 新增 32M 分区补丁（生成 32M dtsi、改写 HC5761 的 include、改 `mt7620.mk` 的 `IMAGE_SIZE`），改完自带校验，出错直接终止编译 |
+| `.github/workflows/openwrt-builder.yml` | 源码从 `coolsnowwolf/lede` 换成 `immortalwrt/immortalwrt` + `openwrt-23.05`；加 ccache 缓存、加"64M 补丁自检"步骤、加超时保护 |
+| `diy-part2.sh` | 新增 64M 分区补丁（生成 64M dtsi、改写 HC5761 的 include、改 `mt7620.mk` 的 `IMAGE_SIZE`），改完自带校验，出错直接终止编译 |
 | `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 5 个服务插件（ddns/wol/upnp/vlmcsd/xlnetacc），其余由 `make defconfig` 补全 |
 | `files/etc/uci-defaults/99-luci-theme` | 开机把默认主题设成 Argon（iStoreOS 同款），没有则退回 material / bootstrap |
 | `files/etc/uci-defaults/99-argon-look` | 开机把 Argon 主色设为 `#2f7ef7`、登录页背景设为纯色（不拉 Bing 图） |
-| `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 32MB 总容量与 mtd 分区表 |
+| `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 64MB 总容量与 mtd 分区表 |
 | `files/www/luci-static/resources/view/dash.js` 等 3 个文件 | 自建「状态 → 仪表盘」页：CPU/内存/网速实时曲线、内存环形图、Flash 堆叠条，零依赖零安装 |
 | `diy-part1.sh` | helloworld（passwall 等）第三方源默认注释掉，减少首次编译失败点 |
 | `.gitattributes` | 强制 `.sh` / `.yml` / `.config` 用 LF，避免 Windows 下 CRLF 让 bash 报 `bad interpreter` |
@@ -38,23 +38,23 @@ HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 | firmware | 0x050000 | 0x0F7000 → 到 0xFC0000 |
 | oem / bdinfo / backup | 0xFC0000 起 | 共 0x040000 |
 
-本仓库改成 32MB：
+本仓库改成 64MB：
 
 | 分区 | 偏移 | 大小 |
 | --- | --- | --- |
 | u-boot | 0x000000 | 0x030000 (192K) |
 | hw_panic | 0x030000 | 0x010000 (64K) |
 | factory（art/EEPROM + MAC + 5G cal） | 0x040000 | 0x010000 (64K) |
-| **firmware** | **0x050000** | **0x1FB0000（32448K）→ 到 0x2000000（整 32MB）** |
+| **firmware** | **0x050000** | **0x3FB0000（65216K）→ 到 0x4000000（整 64MB）** |
 
-配套 `IMAGE_SIZE := 32448k`（原来 15808k）。
+配套 `IMAGE_SIZE := 65216k`（原来 15808k）。
 
 **为什么前三个分区一格都不动：** Breed 烧固件固定在 0x050000，art（EEPROM）固定在 0x040000。
 这两个位置动了，就会刷完没 MAC、没无线、甚至不进系统。
-所以只把 firmware 的尾巴拉长到 32MB 末尾，并删掉 16M 尾部那三个 OEM 分区（不删的话会和扩容后的 firmware 重叠，重叠分区直接起不来）。
+所以只把 firmware 的尾巴拉长到 64MB 末尾，并删掉 16M 尾部那三个 OEM 分区（不删的话会和扩容后的 firmware 重叠，重叠分区直接起不来）。
 
 > 上游分区定义在共用文件 `mt7620a_hiwifi_hc5x61.dtsi`（hc5661/hc5761 共用）。
-> 脚本是**复制一份**成 `mt7620a_hiwifi_hc5x61-32m.dtsi` 再改，只让 hc5761 引用它，不动上游原文件。
+> 脚本是**复制一份**成 `mt7620a_hiwifi_hc5x61-64m.dtsi` 再改，只让 hc5761 引用它，不动上游原文件。
 
 ---
 
@@ -62,14 +62,14 @@ HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 
 1. 提交并推送到你自己仓库的 `hc5761-openwrt-23.05` 分支
 2. 仓库 → **Actions** → 左侧 **OpenWrt Builder** → **Run workflow** → 选该分支 → Run
-3. 前 ~3 分钟的 `Verify 32M patch` 日志就是自检，必须看到：
+3. 前 ~3 分钟的 `Verify 64M patch` 日志就是自检，必须看到：
 
 ```
-IMAGE_SIZE := 32448k
+IMAGE_SIZE := 65216k
       u-boot    0x00000000 - 0x00030000  (192K)
       hw_panic  0x00030000 - 0x00040000  (64K)
       factory   0x00040000 - 0x00050000  (64K)
-      firmware  0x00050000 - 0x02000000  (32448K)
+      firmware  0x00050000 - 0x04000000  (65216K)
 ```
 
 4. 首次约 3～4 小时。成功后在 **Artifacts** 下载 `OpenWrt_firmware_hiwifi_hc5761_*`，
@@ -96,26 +96,26 @@ IMAGE_SIZE := 32448k
    （HC5761 没有 factory.bin，Breed 刷 sysupgrade.bin 就是标准做法；Breed 只按字节写到 0x50000）
 5. 等 1～2 分钟自动重启，进 `192.168.1.1`
 
-**跨尺寸（16M 固件 ↔ 32M 固件）不能走 sysupgrade / LuCI 升级**（分区表大小校验对不上），必须 Breed 刷；
+**跨尺寸（不同容量固件互刷）不能走 sysupgrade / LuCI 升级**（分区表大小校验对不上），必须 Breed 刷；
 刷完是全新系统，**旧配置不保留**（overlay 在 firmware 分区里，被整段覆盖）。
 
-**同尺寸（32M → 32M）之后**，LuCI 里的固件升级 / `sysupgrade -n` 都正常。
+**同尺寸（64M → 64M）之后**，LuCI 里的固件升级 / `sysupgrade -n` 都正常。
 
 ---
 
 ## 五、刷完必须做的 3 项验证
 
 ```sh
-# 1) 分区是否真的 32M（firmware 应该是 01fb0000）
+# 1) 分区是否真的 64M（firmware 应该是 03fb0000）
 cat /proc/mtd
 
 # 期望：
 # mtd0: 00030000 00010000 "u-boot"
 # mtd1: 00010000 00010000 "hw_panic"
 # mtd2: 00010000 00010000 "factory"
-# mtd3: 01fb0000 00010000 "firmware"
+# mtd3: 03fb0000 00010000 "firmware"
 
-# 2) SPI 芯片是否被正确识别成 32MB（单位字节，应为 33554432）
+# 2) SPI 芯片是否被正确识别成 64MB（单位字节，应为 67108864）
 dmesg | grep -iE 'spi-nor|m25p|w25q|mx25|jedec'
 
 # 3) 无线 + MAC 是否正常（factory 分区读到了）
@@ -125,7 +125,7 @@ ip link show | grep -E 'wlan|eth'
 
 ### 硬件层面的一个已知限制（不是补丁写错）
 
-MT7620A 的 SPI 在 **3 字节地址模式**下最多只能寻址 **16MB**；要用满 32MB，必须走 **4 字节地址模式**，
+MT7620A 的 SPI 在 **3 字节地址模式**下最多只能寻址 **16MB**；要用满 64MB，必须走 **4 字节地址模式**，
 且 flash 芯片本身要支持 4B（如 W25Q256 / MX25L25635 这类）。
 Linux 的 spi-nor 对 >16MB 的芯片通常会自动切 4B opcode，但个别芯片/驱动组合会失败。
 
@@ -140,7 +140,7 @@ Linux 的 spi-nor 对 >16MB 的芯片通常会自动切 4B opcode，但个别芯
   不确定包名时，本地拉源码 `make menuconfig` 调好，把生成的 `.config` 覆盖过来即可。
 - **加 passwall**：取消 `diy-part1.sh` 里 helloworld 那行注释，`.config` 里加 `CONFIG_PACKAGE_luci-app-passwall=y`。
 - **换分支**：`openwrt-builder.yml` 里 `REPO_BRANCH` 改成 `openwrt-24.10` 等；
-  换分支后务必先看 `Verify 32M patch` 那步，确认上游 DTS/分区结构没变（脚本找不到文件会直接失败，不会静默出 16M 固件）。
+  换分支后务必先看 `Verify 64M patch` 那步，确认上游 DTS/分区结构没变（脚本找不到文件会直接失败，不会静默出 16M 固件）。
 
 ---
 
@@ -148,7 +148,7 @@ Linux 的 spi-nor 对 >16MB 的芯片通常会自动切 4B opcode，但个别芯
 
 固件只占三分之一，剩下三分之二在芯片、Bootloader 和验证上。
 
-### 7.1 32MB（本次目标）
+### 7.1 32MB（备选方案）
 
 **A. 芯片（硬件，必须自己确认）**
 
@@ -169,7 +169,7 @@ Linux 的 spi-nor 对 >16MB 的芯片通常会自动切 4B opcode，但个别芯
 **C. 固件（本仓库已完成）**
 
 - DTS：firmware `0x50000 → 0x2000000`，前三个分区不动
-- `IMAGE_SIZE := 32448k`
+- `IMAGE_SIZE := 65216k`
 
 **D. 软件/环境（基本不用动）**
 
@@ -198,7 +198,7 @@ dd if=/dev/zero of=/overlay/t.bin bs=1M count=20 && rm -f /overlay/t.bin
    把 32m dtsi 里 `spi-max-frequency = <50000000>` 改成 `<25000000>` 即可。
    本仓库的补丁脚本可以在这一行上一并处理。
 
-### 7.2 64MB 会怎么样
+### 7.2 64MB（本分支目标）
 
 - **理论上可以**：MT7620A 的 SPI 是 3B 模式 16MB / 4B 模式 **64MB（512Mbit）** 上限
 - **固件数字**：firmware `0x50000 → 0x4000000` = `0x3FB0000` → `IMAGE_SIZE := 65216k`，
@@ -212,7 +212,7 @@ dd if=/dev/zero of=/overlay/t.bin bs=1M count=20 && rm -f /overlay/t.bin
   多出来的空间主要用来多塞几个插件
 - **结论**：能做，但不值。32MB 是这块板子的甜点，64MB 属于折腾成本翻倍、体验提升有限
 
-### 7.3 怎么离线确认一个 sysupgrade.bin 到底是不是 32M 版
+### 7.3 怎么离线确认一个 sysupgrade.bin 到底是不是对应容量版
 
 **不能凭文件大小判断**：16M 和 32M 版编出来的镜像都只有 9MB 左右（squashfs 只装包，不占满分区）。
 但固件自带 DTB，分区表就在里面，可以这么验：
@@ -221,6 +221,7 @@ dd if=/dev/zero of=/overlay/t.bin bs=1M count=20 && rm -f /overlay/t.bin
 2. 载荷是 LZMA（alone 格式），解压后**末尾追加了 DTB**（magic `d0 0d fe ed`）
 3. 在 DTB 里找 `label = "firmware"` 节点的 `reg`：
    - `0x50000 0x1FB0000` → 32MB 版 ✅
+   - `0x50000 0x3FB0000` → 64MB 版 ✅
    - `0x50000 0x0F7000` → 16MB 原版 ❌（多出来的 16MB 用不到）
 4. 顺便确认 "载荷后面紧跟 squashfs 魔数 `hsqs`"（偏移 0），说明是 uImage+squashfs 裸拼接、Breed 可直接写
 
@@ -259,7 +260,7 @@ master 已是 3.1.x（依赖 ucode-mod-math / coreutils-timeout，和 23.05 的 
 
 - 登录页和后台都是 Argon，中文界面照旧
 - **系统 → Argon 主题配置**：壁纸（可上传自己的图，支持多张轮换）、毛玻璃模糊强度、深色模式、主色调、菜单折叠
-- 体积约 1.5MB，当前镜像才 9.3MB / 32448K，塞得下
+- 体积约 1.5MB，当前镜像才 9.3MB / 65216K，塞得下
 
 ### 8.3 想手工改 / 想退回 bootstrap
 
@@ -281,13 +282,13 @@ uci commit luci
 - 换主题必须**重新跑一次 Actions 编译**，不能只刷旧固件（包里没这个主题）。ccache 命中后约 40 分钟。
 - 已刷的 32M 固件（release `2026.11.13-2338`）里没有 Argon，想用就得等新包。
 
-## 九、32MB 的软重启卡死：已修（加一行 DTS 属性，不动内核源码）
+## 九、>16MB Flash 的软重启卡死：已修（加一行 DTS 属性，不动内核源码）
 
 ### 9.1 现象
 
 `reboot` 之后整机没反应：指示灯不亮、ping 不通，**拔电源等 30 秒再插电就恢复正常**。
 
-这不是刷坏，是 32MB 的已知副作用。
+这不是刷坏，是 >16MB Flash 的已知副作用。
 
 ### 9.2 原因
 
@@ -314,8 +315,8 @@ nor->addr_width == 4 && !(nor->flags & SNOR_F_4B_OPCODES) && nor->flags & SNOR_F
 
 ### 9.4 改了什么（两处）
 
-1. `diy-part2.sh`：在生成的 32M dtsi 中，给 `flash@0` 节点插一行 `broken-flash-reset;`（带锚点校验，找不到 `jedec,spi-nor` 就 `exit 1`，不会白跑编译）
-2. 工作流 `Verify 32M patch` 步骤加了自检：`broken-flash-reset;` 必须恰好出现 1 次，否则构建当场失败
+1. `diy-part2.sh`：在生成的 64M dtsi 中，给 `flash@0` 节点插一行 `broken-flash-reset;`（带锚点校验，找不到 `jedec,spi-nor` 就 `exit 1`，不会白跑编译）
+2. 工作流 `Verify 64M patch` 步骤加了自检：`broken-flash-reset;` 必须恰好出现 1 次，否则构建当场失败
 
 生成结果（已本地对真实上游文件回归通过）：
 
@@ -452,7 +453,7 @@ CONFIG_PACKAGE_luci-i18n-xlnetacc-zh-cn=y
 
 ### 10.4 体积与编译时间
 
-5 个 app 全是 `PKGARCH:=all` 的前端 + 几个几百 KB 的小二进制，合计约 **+2~3MB**（vlmcsd 约 200KB、miniupnpd 约 100KB、etherwake 几十 KB，改造后不再拉 adbyby 那 1MB 和 dnsmasq-full）。sysupgrade.bin 大概 **10~11MB**，32MB 分区大量余量。编译时间不变（ccache 命中约 40 分钟）。
+5 个 app 全是 `PKGARCH:=all` 的前端 + 几个几百 KB 的小二进制，合计约 **+2~3MB**（vlmcsd 约 200KB、miniupnpd 约 100KB、etherwake 几十 KB，改造后不再拉 adbyby 那 1MB 和 dnsmasq-full）。sysupgrade.bin 大概 **10~11MB**，64MB 分区大量余量。编译时间不变（ccache 命中约 40 分钟）。
 
 ### 10.5 刷完验收
 
@@ -485,7 +486,7 @@ LuCI 登录后「服务」菜单下应正好出现 5 个新项：动态 DNS、�
 | `luci-mod-dashboard`（首页大盘） | 路由 / LAN / WiFi 三块卡片 | 没有存储卡片 |
 | `luci-app-diskman`（磁盘管理） | U 盘、移动硬盘的分区表 | 读 `/sys/block`，SPI NOR 是 `/dev/mtdblockN`，不在里面 |
 | `luci-app-netdata` / `luci-app-statistics` | 系统负载、df 曲线图 | 只画 `/overlay` 已用量，看不到芯片总容量 |
-| 自带「状态 → 概览」 | `磁盘空间 696 KiB / 21.81 MiB` | 这是 overlay 分区，不是 32MB 芯片 |
+| 自带「状态 → 概览」 | `磁盘空间 696 KiB / 21.81 MiB` | 这是 overlay 分区，不是整颗芯片容量 |
 | 自带「系统 → 挂载点」 | `/dev/mtdblock6 → /overlay` | 只有挂载点，没有分区总表 |
 
 **芯片真实容量只出现在 `dmesg` 的 `spi-nor spi0.0: w25q256 (32768 Kbytes)` 这一行**，没有任何 LuCI 包去解析它。所以直接在 `files/` 里给你塞了一个自建页面，随固件打包，不用装包、不占 opkg 空间。
@@ -496,8 +497,8 @@ LuCI 登录后「服务」菜单下应正好出现 5 个新项：动态 DNS、�
 
 页面就两块：
 
-1. **Flash 总容量（顶层分区合计）**：`32.00 MiB`，下面附 `33554432 字节 / 0x2000000（基准：16MB=16777216，32MB=33554432，64MB=67108864）`。
-2. **分区表**：设备 / 名称 / 大小 / 十六进制 / 擦除块 / 类型六列，`kernel`、`rootfs`、`rootfs_data` 标为「固件内子分区」，**不重复计入总量**（否则会算出 32MB + 8MB 的假数字）。
+1. **Flash 总容量（顶层分区合计）**：`64.00 MiB`，下面附 `67108864 字节 / 0x4000000（基准：16MB=16777216，32MB=33554432，64MB=67108864）`。
+2. **分区表**：设备 / 名称 / 大小 / 十六进制 / 擦除块 / 类型六列，`kernel`、`rootfs`、`rootfs_data` 标为「固件内子分区」，**不重复计入总量**（否则会算出整颗容量 + 子分区的假数字）。
 
 数据源只有 `/proc/mtd` 一个文件，开机实时读，不缓存。
 
@@ -525,7 +526,7 @@ mtd3 firmware 31.69MiB 0x01FB0000  顶层
 mtd4 kernel   2.21MiB  0x00235C5D  子分区
 mtd5 rootfs   29.48MiB 0x01D7A3A3  子分区
 mtd6 rootfs_data 21.81MiB 0x015D0000 子分区
-总容量 = 33554432 字节 = 32.00 MiB = 0x2000000  → 32MB 正确
+总容量 = 67108864 字节 = 64.00 MiB = 0x4000000  → 64MB 正确
 ```
 
 `node --check` 过语法、两个 JSON 过 `JSON.parse`，blob 里 CR=0（已把 `files/** text eol=lf` 加进 `.gitattributes`，避免 CRLF 被带进镜像）。
