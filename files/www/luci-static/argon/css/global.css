@@ -1,0 +1,209 @@
+/*
+ * HC5761 全局风格统一覆盖层
+ * 对齐首页 Argon 蓝白卡片：1px 浅边框 / 10px 圆角 / 主色 #2f7ef7
+ * 作用于 LuCI stock 页面（状态 / 系统 / 网络 / 服务），首页 .home 由 home.js 自带样式，不受影响。
+ * 注意：只做视觉对齐，不改主题原有布局节奏（内边距、flex 间距仍由 cascade.css 决定）。
+ */
+
+:root {
+	--home-primary: #2f7ef7;
+}
+
+/* ---------- 页面整体间距 ---------- */
+.main-right > #maincontent > .container {
+	gap: 12px;
+}
+
+/* ---------- 卡片（边框 / 圆角 / 底色，不动内边距） ---------- */
+.cbi-section,
+.cbi-section-error,
+.Firewall form,
+#iptables,
+#cbi-network > .cbi-section-node,
+#cbi-wireless > .cbi-section-node {
+	border: 1px solid rgba(0, 0, 0, .08);
+	border-radius: 10px;
+	background: #fff;
+	box-shadow: none;
+}
+
+/* 嵌套卡片（节点内子表/子组）不再套边框 */
+.cbi-modal .cbi-section,
+.cbi-section .cbi-section,
+fieldset > fieldset {
+	border: 0;
+	padding: 0;
+	box-shadow: none;
+	background: transparent;
+}
+
+/* 卡片标题：只调字号 / 字重 / 颜色，保留主题原有内边距 */
+.cbi-section > h3:first-child,
+.panel-title {
+	font-size: 13px;
+	font-weight: 600;
+	letter-spacing: .4px;
+	opacity: .72;
+}
+
+/* 描述/说明文字 */
+.cbi-map-descr,
+.cbi-section-descr {
+	font-size: 12px;
+	line-height: 1.55;
+	opacity: .7;
+}
+
+/* ---------- 表单标签 / 取值 ---------- */
+.cbi-value-title {
+	font-size: 12px;
+	opacity: .62;
+}
+
+.cbi-value-field {
+	font-size: 12px;
+}
+
+/* ---------- 表格 ---------- */
+.table,
+table.cbi-section-table,
+table {
+	font-size: 12px;
+}
+
+.tr.table-titles > .th,
+.tr.cbi-section-table-titles > .th,
+.thead > .tr > .th,
+thead > tr > th {
+	background: rgba(0, 0, 0, .03);
+	opacity: .62;
+	font-weight: 600;
+	border-bottom: 1px solid rgba(0, 0, 0, .08);
+}
+
+tr > td,
+.tr > .td {
+	border-bottom: 1px solid rgba(0, 0, 0, .05);
+	padding: 7px 8px;
+}
+
+tr:last-child > td,
+.tr:last-child > .td {
+	border-bottom: 0;
+}
+
+.cbi-section-table-row {
+	margin-bottom: 8px;
+}
+
+/* 嵌套表格（单选/复选组等）去掉边框与单元格内边距 */
+table table,
+.table .table,
+.cbi-value-field table,
+.cbi-value-field .table {
+	border: 0;
+}
+
+table table td,
+.cbi-value-field table td,
+.td > .table > .tbody > .tr > .td {
+	border-bottom: 0;
+	padding: 0;
+}
+
+/* ---------- 输入控件 ---------- */
+.cbi-input-text,
+.cbi-input-password,
+.cbi-input-select,
+.cbi-input-textarea,
+select,
+textarea,
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+	border: 1px solid rgba(0, 0, 0, .12);
+	border-radius: 6px;
+	padding: 6px 10px;
+	font-size: 12px;
+	background: #fff;
+	color: inherit;
+}
+
+.cbi-input-text:focus,
+.cbi-input-password:focus,
+.cbi-input-select:focus,
+.cbi-input-textarea:focus,
+select:focus,
+textarea:focus,
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus {
+	border-color: var(--home-primary);
+	box-shadow: 0 0 0 2px rgba(47, 126, 247, .15);
+	outline: none;
+}
+
+/* ---------- 按钮 ---------- */
+.btn,
+.cbi-button {
+	border-radius: 6px;
+	font-size: 12px;
+	padding: 6px 12px;
+}
+
+.btn.primary,
+.cbi-button-save,
+.cbi-button-add,
+.cbi-button-positive,
+.cbi-page-actions .cbi-button-save {
+	background: var(--home-primary);
+	border-color: var(--home-primary);
+	color: #fff;
+}
+
+.btn.primary:hover,
+.cbi-button-save:hover,
+.cbi-button-add:hover,
+.cbi-button-positive:hover {
+	filter: brightness(1.05);
+	box-shadow: 0 4px 12px rgba(47, 126, 247, .25);
+}
+
+.cbi-button-neutral,
+.cbi-button-link,
+.cbi-button-find,
+.cbi-button-up,
+.cbi-button-down,
+.cbi-button[name="zero"] {
+	background: #fff;
+	border: 1px solid rgba(0, 0, 0, .15);
+	color: inherit;
+}
+
+/* ---------- 标签页 ---------- */
+.tabs,
+.cbi-tabmenu {
+	gap: 8px;
+}
+
+.tabs > li > a,
+.cbi-tabmenu > li > a {
+	border-radius: 6px;
+}
+
+.tabs li.active > a,
+.cbi-tabmenu li.cbi-tab > a {
+	background: var(--home-primary);
+	color: #fff;
+}
+
+/* ---------- 提示条 ---------- */
+.alert-message {
+	border-radius: 10px;
+	border: 1px solid rgba(0, 0, 0, .08);
+}
+
+/* ---------- 链接主色 ---------- */
+a {
+	color: var(--home-primary);
+}

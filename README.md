@@ -16,9 +16,10 @@ HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 | --- | --- |
 | `.github/workflows/openwrt-builder.yml` | 源码从 `coolsnowwolf/lede` 换成 `immortalwrt/immortalwrt` + `openwrt-23.05`；加 ccache 缓存、加"32M 补丁自检"步骤、加超时保护 |
 | `diy-part2.sh` | 新增 32M 分区补丁（生成 32M dtsi、改写 HC5761 的 include、改 `mt7620.mk` 的 `IMAGE_SIZE`），改完自带校验，出错直接终止编译 |
-| `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 5 个基础服务插件（ddns/wol/upnp/vlmcsd/xlnetacc）+ Passwall 科学上网面板，其余由 `make defconfig` 补全 |
+| `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 4 个基础服务插件（wol/upnp/vlmcsd/xlnetacc）+ Passwall 科学上网面板，其余由 `make defconfig` 补全 |
 | `files/etc/uci-defaults/99-luci-theme` | 开机把默认主题设成 Argon（iStoreOS 同款），没有则退回 material / bootstrap |
 | `files/etc/uci-defaults/99-argon-look` | 开机把 Argon 主色设为 `#2f7ef7`、登录页背景设为纯色（不拉 Bing 图） |
+| `files/www/luci-static/argon/css/global.css` + Argon `header.htm` | 全局覆盖样式：把状态 / 系统 / 网络等 stock 页面的卡片、表格、表单、按钮、标签页对齐首页蓝白卡片风格 |
 | `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 32MB 总容量与 mtd 分区表 |
 | `files/www/luci-static/resources/view/dash.js` 等 3 个文件 | 自建「状态 → 仪表盘」页：CPU/内存/网速实时曲线、内存环形图、Flash 堆叠条，零依赖零安装 |
 | `diy-part1.sh` | 挂载 Passwall 第三方源（passwall_packages 内核 + passwall_luci 面板） |
@@ -400,11 +401,10 @@ uci commit argon
 | `files/etc/uci-defaults/99-luci-theme` | 开机把 `luci.main.mediaurlbase` 设成 argon（退回 material → bootstrap） |
 | `files/etc/uci-defaults/99-argon-look` | 开机把 argon 主色设成 `#2f7ef7`、登录页背景设成 none |
 
-### 10.2 参考图 8 个服务项：装 5 个，去掉 1 个，装不了 2 个
+### 10.2 参考图 8 个服务项：装 5 个（4 基础 + Passwall），去掉 2 个（ddns、adbyby），不开/装不了 2 个
 
 | 参考图菜单名 | 实际包名 | 依赖（自动装） | 状态 |
 |---|---|---|---|
-| 动态 DNS | `luci-app-ddns` | ddns-scripts | ✅ 已装 |
 | 网络唤醒 | `luci-app-wol` | etherwake | ✅ 已装 |
 | UPnP | `luci-app-upnp` | miniupnpd + rpcd-mod-ucode | ✅ 已装 |
 | KMS 服务器 | `luci-app-vlmcsd` | vlmcsd | ✅ 已装 |
@@ -436,13 +436,11 @@ CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_PACKAGE_wget-ssl=y
 
-CONFIG_PACKAGE_luci-app-ddns=y
 CONFIG_PACKAGE_luci-app-wol=y
 CONFIG_PACKAGE_luci-app-upnp=y
 CONFIG_PACKAGE_luci-app-vlmcsd=y
 CONFIG_PACKAGE_luci-app-xlnetacc=y
 
-CONFIG_PACKAGE_luci-i18n-ddns-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y
@@ -453,7 +451,7 @@ CONFIG_PACKAGE_luci-i18n-xlnetacc-zh-cn=y
 
 ### 10.4 体积与编译时间
 
-5 个基础 app 全是 `PKGARCH:=all` 前端 + 几百 KB 小二进制；Passwall 按 23.05/mipsel 实际 ipk 体积核算：内核与辅助程序约 0.94MB（trojan-plus 370KB、chinadns-ng 292KB、SS/SSR-libev 与 obfs 均几十 KB），加面板与依赖合计 **+2.2~2.6MB**（ipk 压缩口径）。基线 sysupgrade 10.31MB，加 Passwall 后预计 **12~13MB**，32MB 分区余量充足。编译时间不变（ccache 命中约 40 分钟）。
+4 个基础 app 全是 `PKGARCH:=all` 前端 + 几百 KB 小二进制；Passwall 按 23.05/mipsel 实际 ipk 体积核算：内核与辅助程序约 0.94MB（trojan-plus 370KB、chinadns-ng 292KB、SS/SSR-libev 与 obfs 均几十 KB），加面板与依赖合计 **+2.2~2.6MB**（ipk 压缩口径）。基线 sysupgrade 10.31MB，加 Passwall 后预计 **12~13MB**，32MB 分区余量充足。编译时间不变（ccache 命中约 40 分钟）。
 
 ### 10.5 刷完验收
 
@@ -466,14 +464,14 @@ uci get luci.main.mediaurlbase
 ls /www/luci-static/ | tr '\n' ' '
 # 期望里面能看到 argon 和 material
 
-# 3) 五个基础服务插件 + Passwall 都装上了
-opkg list-installed | grep -E 'luci-app-(ddns|wol|upnp|vlmcsd|xlnetacc|passwall)'
+# 3) 四个基础服务插件 + Passwall 都装上了
+opkg list-installed | grep -E 'luci-app-(wol|upnp|vlmcsd|xlnetacc|passwall)'
 
 # 4) Passwall 依赖 dnsmasq-full（出现 dnsmasq-full 属正常）
 opkg list-installed | grep dnsmasq
 ```
 
-LuCI 登录后「服务」菜单下应出现：动态 DNS、网络唤醒、UPnP、KMS 服务器、迅雷快鸟，以及「Passwall」。
+LuCI 登录后「服务」菜单下应出现：网络唤醒、UPnP、KMS 服务器、迅雷快鸟，以及「Passwall」。
 
 ## 十一、LuCI 里直接看 Flash 大小（自建「Flash 信息」页）
 
