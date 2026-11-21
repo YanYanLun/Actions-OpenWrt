@@ -735,7 +735,8 @@ return view.extend({
 			'.home-shot{ position:relative; height:190px; }',
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
-			'.home-four{ display:grid; gap:12px; grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:12px; }',
+			'.home-three{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr); margin-top:12px; }',
+			'.home-dual{ display:grid; gap:12px; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); margin-top:12px; }',
 			'.net-rows{ display:grid; gap:7px; font-size:12px; }',
 			'.net-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
 			'.net-rows span{ opacity:.58; }',
@@ -744,9 +745,10 @@ return view.extend({
 			'.port-tile{ flex:1; min-width:62px; border:1px solid rgba(0,0,0,.08); border-radius:8px; padding:8px 6px; text-align:center; }',
 			'.port-tile .p-icon{ line-height:0; margin-bottom:6px; }',
 			'.port-tile .p-name{ font-size:11px; opacity:.7; margin-bottom:2px; }',
-			'.port-tile .p-speed{ font-size:11px; font-variant-numeric:tabular-nums; }',
-			'.port-tile.up .p-speed{ color:#10a374; }',
-			'.port-tile.down .p-speed{ opacity:.5; }',
+			'.port-tile .p-state{ font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; }',
+			'.port-tile .p-speed{ font-size:10px; opacity:.55; margin-top:1px; }',
+			'.port-tile.up .p-state{ color:#10a374; }',
+			'.port-tile.down .p-state{ opacity:.5; }',
 			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
 			'.wifi-radio{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
 			'.wifi-top{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }',
@@ -793,7 +795,7 @@ return view.extend({
 			'@media (max-width:1100px){ .home-quick{ grid-template-columns:repeat(4,minmax(0,1fr)); } }',
 			/* SHORTCUTS:END */
 			'@media (max-width:1100px){ .home-wifi{ grid-template-columns:minmax(0,1fr); } }',
-			'@media (max-width:820px){ .home-wide, .home-four, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
+			'@media (max-width:820px){ .home-wide, .home-three, .home-dual, .home-wifi{ grid-template-columns:minmax(0,1fr); } }'
 		].join('\n');
 
 		var cvCpu = E('canvas', { class: 'home-cv', width: MINI_W, height: MINI_H, style: 'height:52px' }),
@@ -821,6 +823,7 @@ return view.extend({
 		refs.flashLegend = E('div', { class: 'home-legend' });
 		refs.info = E('div', { class: 'home-info' });
 		refs.netInfo = E('div', { class: 'net-rows' });
+		refs.portHead = E('div', { class: 'val' }, '—');
 		refs.portBox = E('div', { class: 'port-box' });
 
 		/* SHORTCUTS:BEGIN */
@@ -871,7 +874,7 @@ return view.extend({
 					refs.donutLegend
 				])
 			]),
-			E('div', { class: 'home-four' }, [
+			E('div', { class: 'home-three' }, [
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, 'Flash 存储'),
 					refs.flashVal,
@@ -885,8 +888,12 @@ return view.extend({
 				]),
 				E('div', { class: 'home-card' }, [
 					E('h4', {}, '网络'),
-					refs.netInfo,
-					E('h4', { style: 'margin-top:12px' }, '网口状态'),
+					refs.netInfo
+				])
+			]),
+			E('div', { class: 'home-dual' }, [
+				E('div', { class: 'home-card' }, [
+					E('div', { class: 'home-head' }, [ E('h4', {}, '网口状态'), refs.portHead ]),
 					refs.portBox
 				]),
 				E('div', { class: 'home-card' }, [
@@ -1063,6 +1070,10 @@ return view.extend({
 			});
 
 			refs.portBox.textContent = '';
+			var wanN = portList.filter(function(p) { return p.role === 'WAN'; }).length,
+				lanN = portList.length - wanN;
+			refs.portHead.textContent = portList.length ? ('WAN ' + wanN + ' · LAN ' + lanN) : '—';
+
 			if (!portList.length) {
 				refs.portBox.appendChild(E('div', { class: 'home-empty' }, '未检测到有线网口'));
 				return;
@@ -1074,7 +1085,8 @@ return view.extend({
 				refs.portBox.appendChild(E('div', { class: 'port-tile ' + (p.carrier ? 'up' : 'down') }, [
 					ico,
 					E('div', { class: 'p-name' }, p.role || p.name),
-					E('div', { class: 'p-speed' }, speedText(p))
+					E('div', { class: 'p-state' }, p.carrier ? '在用' : '空闲'),
+					E('div', { class: 'p-speed' }, p.carrier ? speedText(p) : '无链路')
 				]));
 			});
 		};
