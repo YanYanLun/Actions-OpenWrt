@@ -2,6 +2,7 @@
 
 'require view';
 'require fs';
+'require rpc';
 
 var NESTED = /^(kernel|rootfs|rootfs_data)$/;
 var HIST = 60;
@@ -16,6 +17,8 @@ var MINI_W = 320, MINI_H = 72;
 var PAD = { l: 14, r: 12, t: 10, b: 12 };
 
 var PAGE_TITLE = '首页';
+
+var callSystemInfo = rpc.declare({ object: 'system', method: 'info' });
 
 function parseCpu(txt) {
 	var m = (txt || '').match(/(?:^|\n)cpu\s+([^\n]+)/);
@@ -644,6 +647,7 @@ return view.extend({
 		    emaCpu = null, emaDl = null, emaUl = null,
 		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0, clients = [],
+		    mtdTotal = 0, flashStat = { used: 0, free: 0, total: 0 },
 		    radios = [], wifiMac = {}, last = { netDev: '' },
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
@@ -808,6 +812,23 @@ return view.extend({
 			return p.catch(function() { return ''; });
 		};
 
+		var renderFlash = function() {
+			if (mtdTotal <= 0) return;
+			refs.flashVal.textContent = flashStat.used > 0 ? bytes(flashStat.used) : '—';
+			refs.flashSub.textContent = '共 ' + mib(mtdTotal) + (flashStat.free > 0 ? ' · 可用 ' + bytes(flashStat.free) : '');
+			drawDonut(cvFlashDonut, [
+				{ v: flashStat.used, c: '#2f7ef7' },
+				{ v: Math.max(0, flashStat.total - flashStat.used), c: 'rgba(128,128,128,.35)' }
+			]);
+			refs.flashLegend.textContent = '';
+			refs.flashLegend.appendChild(E('span', {}, [
+				E('i', { style: 'background:#2f7ef7' }), '已用 ' + bytes(flashStat.used)
+			]));
+			refs.flashLegend.appendChild(E('span', {}, [
+				E('i', { style: 'background:rgba(128,128,128,.35)' }), '可用 ' + bytes(flashStat.free)
+			]));
+		};
+
 		var push = function(arr, v, t, wall) {
 			arr.push({ t: t, v: v, w: wall });
 
@@ -951,7 +972,8 @@ return view.extend({
 				slow ? safe(fs.read('/tmp/dhcp.leases')) : Promise.resolve(null),
 				slow ? safe(fs.read('/proc/net/arp')) : Promise.resolve(null),
 				statLoaded ? Promise.resolve(null) : safe(fs.read('/etc/openwrt_release')),
-				slow ? safe(fs.read('/etc/config/wireless')) : Promise.resolve(null)
+				slow ? safe(fs.read('/etc/config/wireless')) : Promise.resolve(null),
+				slow ? safe(callSystemInfo()) : Promise.resolve(null)
 			]).then(function(r) {
 				var cpu = parseCpu(r[0]),
 				    pct = cpuPercent(prevCpu, cpu);
@@ -1008,6 +1030,14 @@ return view.extend({
 				last.netDev = r[2];
 
 				if (slow) {
+					if (r[14] && r[14].root) {
+						var sroot = r[14].root;
+						flashStat.total = (Number(sroot.total) || 0) * 1024;
+						flashStat.used = (Number(sroot.used) || 0) * 1024;
+						flashStat.free = (Number(sroot.free) != null ? Number(sroot.free) : (Number(sroot.total) - Number(sroot.used))) * 1024;
+						renderFlash();
+					}
+
 					refs.upVal.textContent = uptimeText(parseUptime(r[3]));
 					refs.upSub.textContent = '负载 ' + parseLoad(r[4]).map(function(x) {
 						return x.toFixed(2);
@@ -1053,26 +1083,8 @@ return view.extend({
 					else if (ci.bogo > 0)
 						freq = Math.round(ci.bogo * 1.5);
 
-					if (mtd.total > 0) {
-						refs.flashVal.textContent = mib(mtd.total);
-						refs.flashSub.textContent = '分区 ' + mtd.parts.length + ' 个（顶层 ' +
-							mtd.parts.filter(function(p) { return !p.nested; }).length + '）';
-
-						var colors = [ '#2f7ef7', '#f0b429', '#7c5cf0', '#10a374', '#e0508b', '#9aa4b2' ],
-							    tops = mtd.parts.filter(function(p) { return !p.nested; });
-
-						drawDonut(cvFlashDonut, tops.map(function(p, i) {
-							return { v: p.size, c: colors[i % colors.length] };
-						}));
-
-						refs.flashLegend.textContent = '';
-						tops.forEach(function(p, i) {
-							refs.flashLegend.appendChild(E('span', {}, [
-								E('i', { style: 'background:' + colors[i % colors.length] }),
-								p.name + ' ' + bytes(p.size)
-							]));
-						});
-					}
+					mtdTotal = mtd.total;
+					renderFlash();
 
 					var sysType = (ci.system || '').replace(/\s+ver.*$/i, ''),
 					    chip = (sysType.match(/MT\d{4}[A-Za-z]*/) || [ sysType || '未知' ])[0];

@@ -1,23 +1,58 @@
 {
 	"luci-app-home": {
-		"description": "首页：读取 /proc 统计数据与无线配置",
+		"description": "首页：读取 /proc 统计、无线配置与系统存储用量（system.info）",
 		"read": {
 			"file": {
-				"/proc/stat": [ "read" ],
-				"/proc/meminfo": [ "read" ],
-				"/proc/net/dev": [ "read" ],
-				"/proc/uptime": [ "read" ],
-				"/proc/loadavg": [ "read" ],
-				"/proc/mtd": [ "read" ],
-				"/proc/version": [ "read" ],
-				"/proc/cpuinfo": [ "read" ],
-				"/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq": [ "read" ],
-				"/proc/device-tree/model": [ "read" ],
-				"/proc/net/arp": [ "read" ],
-				"/tmp/dhcp.leases": [ "read" ],
-				"/etc/openwrt_release": [ "read" ],
-				"/etc/config/wireless": [ "read" ],
-				"/sys/class/net/": [ "read" ]
+				"/proc/stat": [
+					"read"
+				],
+				"/proc/meminfo": [
+					"read"
+				],
+				"/proc/net/dev": [
+					"read"
+				],
+				"/proc/uptime": [
+					"read"
+				],
+				"/proc/loadavg": [
+					"read"
+				],
+				"/proc/mtd": [
+					"read"
+				],
+				"/proc/version": [
+					"read"
+				],
+				"/proc/cpuinfo": [
+					"read"
+				],
+				"/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq": [
+					"read"
+				],
+				"/proc/device-tree/model": [
+					"read"
+				],
+				"/proc/net/arp": [
+					"read"
+				],
+				"/tmp/dhcp.leases": [
+					"read"
+				],
+				"/etc/openwrt_release": [
+					"read"
+				],
+				"/etc/config/wireless": [
+					"read"
+				],
+				"/sys/class/net/": [
+					"read"
+				]
+			},
+			"ubus": {
+				"system": [
+					"info"
+				]
 			}
 		}
 	}
