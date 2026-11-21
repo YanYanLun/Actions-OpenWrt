@@ -16,12 +16,12 @@ HiWiFi HC5761（极路由 2）SPI Flash 由 16MB 硬改为 32MB 后，用 GitHub
 | --- | --- |
 | `.github/workflows/openwrt-builder.yml` | 源码从 `coolsnowwolf/lede` 换成 `immortalwrt/immortalwrt` + `openwrt-23.05`；加 ccache 缓存、加"32M 补丁自检"步骤、加超时保护 |
 | `diy-part2.sh` | 新增 32M 分区补丁（生成 32M dtsi、改写 HC5761 的 include、改 `mt7620.mk` 的 `IMAGE_SIZE`），改完自带校验，出错直接终止编译 |
-| `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 5 个服务插件（ddns/wol/upnp/vlmcsd/xlnetacc），其余由 `make defconfig` 补全 |
+| `.config` | 从空占位换成最小骨架（目标设备 + LuCI 中文 + 常用工具 + USB 存储）+ 主题 Argon/Material + 5 个基础服务插件（ddns/wol/upnp/vlmcsd/xlnetacc）+ Passwall 科学上网面板，其余由 `make defconfig` 补全 |
 | `files/etc/uci-defaults/99-luci-theme` | 开机把默认主题设成 Argon（iStoreOS 同款），没有则退回 material / bootstrap |
 | `files/etc/uci-defaults/99-argon-look` | 开机把 Argon 主色设为 `#2f7ef7`、登录页背景设为纯色（不拉 Bing 图） |
 | `files/www/luci-static/resources/view/flashinfo.js` 等 3 个文件 | 自建「状态 → Flash 信息」页：直接显示 32MB 总容量与 mtd 分区表 |
 | `files/www/luci-static/resources/view/dash.js` 等 3 个文件 | 自建「状态 → 仪表盘」页：CPU/内存/网速实时曲线、内存环形图、Flash 堆叠条，零依赖零安装 |
-| `diy-part1.sh` | helloworld（passwall 等）第三方源默认注释掉，减少首次编译失败点 |
+| `diy-part1.sh` | 挂载 Passwall 第三方源（passwall_packages 内核 + passwall_luci 面板） |
 | `.gitattributes` | 强制 `.sh` / `.yml` / `.config` 用 LF，避免 Windows 下 CRLF 让 bash 报 `bad interpreter` |
 
 ---
@@ -138,7 +138,7 @@ Linux 的 spi-nor 对 >16MB 的芯片通常会自动切 4B opcode，但个别芯
 
 - **加插件**：编辑 `.config`，加 `CONFIG_PACKAGE_xxx=y` 后重新 Run workflow。
   不确定包名时，本地拉源码 `make menuconfig` 调好，把生成的 `.config` 覆盖过来即可。
-- **加 passwall**：取消 `diy-part1.sh` 里 helloworld 那行注释，`.config` 里加 `CONFIG_PACKAGE_luci-app-passwall=y`。
+- **Passwall**：已在 `diy-part1.sh` 挂源、`.config` 启用；默认只带 SS/SSR-libev 客户端 + Simple-Obfs + Trojan-Plus，Xray/Sing-Box/Geodata 等大内核在 `.config` 的 `INCLUDE_*` 开关里关闭。
 - **换分支**：`openwrt-builder.yml` 里 `REPO_BRANCH` 改成 `openwrt-24.10` 等；
   换分支后务必先看 `Verify 32M patch` 那步，确认上游 DTS/分区结构没变（脚本找不到文件会直接失败，不会静默出 16M 固件）。
 
@@ -409,13 +409,14 @@ uci commit argon
 | UPnP | `luci-app-upnp` | miniupnpd + rpcd-mod-ucode | ✅ 已装 |
 | KMS 服务器 | `luci-app-vlmcsd` | vlmcsd | ✅ 已装 |
 | 迅雷快鸟 | `luci-app-xlnetacc` | jshn + wget-ssl + openssl-util（纯脚本） | ✅ 已装 |
+| 科学上网 | `luci-app-passwall` | SS/SSR-libev 客户端、Simple-Obfs、Trojan-Plus、chinadns-ng、dnsmasq-full | ✅ 已装 |
 | 广告屏蔽大师 Plus+ | `luci-app-adbyby-plus` | adbyby + ipset + **dnsmasq-full** + dos2unix | 🚫 主动移除 |
 | 解锁网易云灰歌 | `luci-app-unblockneteasemusic` | **+node** + dnsmasq-full + firewall4 | ⚠️ 默认不开 |
 | 上网时间控制 | — | — | ❌ 源里没有 |
 
 #### 为什么去掉 adbyby
 
-两个独立原因：规则服务器早已停更（装了大概率“能开但没规则”）；它硬依赖 `dnsmasq-full`，会把系统默认的 `dnsmasq` 顶掉，刷完你原来手改的 DNS/DHCP 配置全部失效。**摘掉它以后 `.config` 里也不再有 `dnsmasq-full` 和 `CONFIG_PACKAGE_dnsmasq is not set` 这两行，dnsmasq 保持系统原样。**
+两个独立原因：规则服务器早已停更（装了大概率“能开但没规则”）；它硬依赖 `dnsmasq-full`，会把系统默认的 `dnsmasq` 顶掉，刷完你原来手改的 DNS/DHCP 配置全部失效。**adbyby 摘掉后不再为它单独拉 `dnsmasq-full`；注意 Passwall 自身依赖 `dnsmasq-full`，装了 Passwall 后系统仍是 `dnsmasq-full`。**
 
 要广告拦截就开 `.config` 末尾那两行注释之一：
 
@@ -452,7 +453,7 @@ CONFIG_PACKAGE_luci-i18n-xlnetacc-zh-cn=y
 
 ### 10.4 体积与编译时间
 
-5 个 app 全是 `PKGARCH:=all` 的前端 + 几个几百 KB 的小二进制，合计约 **+2~3MB**（vlmcsd 约 200KB、miniupnpd 约 100KB、etherwake 几十 KB，改造后不再拉 adbyby 那 1MB 和 dnsmasq-full）。sysupgrade.bin 大概 **10~11MB**，32MB 分区大量余量。编译时间不变（ccache 命中约 40 分钟）。
+5 个基础 app 全是 `PKGARCH:=all` 前端 + 几百 KB 小二进制；Passwall 按 23.05/mipsel 实际 ipk 体积核算：内核与辅助程序约 0.94MB（trojan-plus 370KB、chinadns-ng 292KB、SS/SSR-libev 与 obfs 均几十 KB），加面板与依赖合计 **+2.2~2.6MB**（ipk 压缩口径）。基线 sysupgrade 10.31MB，加 Passwall 后预计 **12~13MB**，32MB 分区余量充足。编译时间不变（ccache 命中约 40 分钟）。
 
 ### 10.5 刷完验收
 
@@ -465,14 +466,14 @@ uci get luci.main.mediaurlbase
 ls /www/luci-static/ | tr '\n' ' '
 # 期望里面能看到 argon 和 material
 
-# 3) 五个服务插件都装上了
-opkg list-installed | grep -E 'luci-app-(ddns|wol|upnp|vlmcsd|xlnetacc)'
+# 3) 五个基础服务插件 + Passwall 都装上了
+opkg list-installed | grep -E 'luci-app-(ddns|wol|upnp|vlmcsd|xlnetacc|passwall)'
 
-# 4) dnsmasq 仍是系统原版（不该出现 dnsmasq-full）
+# 4) Passwall 依赖 dnsmasq-full（出现 dnsmasq-full 属正常）
 opkg list-installed | grep dnsmasq
 ```
 
-LuCI 登录后「服务」菜单下应正好出现 5 个新项：动态 DNS、网络唤醒、UPnP、KMS 服务器、迅雷快鸟。
+LuCI 登录后「服务」菜单下应出现：动态 DNS、网络唤醒、UPnP、KMS 服务器、迅雷快鸟，以及「Passwall」。
 
 ## 十一、LuCI 里直接看 Flash 大小（自建「Flash 信息」页）
 

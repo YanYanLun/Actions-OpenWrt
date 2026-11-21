@@ -10,16 +10,15 @@
 # See /LICENSE for more information.
 #
 # ---------------------------------------------------------------------------
-# 本项目改动：helloworld（passwall 等插件所在源）默认不挂。
-#   原因：你的目标只是「32M 分区能正常刷进去跑起来」，少挂一个第三方源
-#         就少一个编译失败点（feeds 拉取失败是 Actions 编译最常见的事故）。
-#   需要科学上网插件时：取消下面这行注释，并在 .config 里打开
-#   CONFIG_PACKAGE_luci-app-passwall=y（或对应插件）。
+# Passwall 第三方源：passwall_packages（内核/辅助程序）+ passwall_luci（面板），
+# 两个都要挂，缺一个 luci-app-passwall 就装不上。
+# 体积控制：.config 里只保留 SS/SSR-libev 客户端 + Simple-Obfs + Trojan-Plus，
+#           Xray / Sing-Box / Hysteria / NaiveProxy / Geodata 等大内核显式关闭。
 # ---------------------------------------------------------------------------
 
 # Uncomment a feed source
 #sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
 
-# Add a feed source
-#echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-#echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
+# Add Passwall feed source
+echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >>feeds.conf.default
+echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >>feeds.conf.default
