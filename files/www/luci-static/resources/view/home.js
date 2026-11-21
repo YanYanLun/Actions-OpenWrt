@@ -647,7 +647,7 @@ return view.extend({
 		    emaCpu = null, emaDl = null, emaUl = null,
 		    cpuAvg = null, cpu3 = [],
 		    netMax = 0, netName = '', cores = 0, clients = [],
-		    mtdTotal = 0, flashStat = { used: 0, free: 0, total: 0 },
+		    mtdTotal = 0, mtdParts = [], flashStat = { used: 0, free: 0, total: 0 },
 		    radios = [], wifiMac = {}, last = { netDev: '' },
 		    started = 0, prevFrame = 0, lastText = 0, lastDraw = 0, lastGrid = 0,
 		    pollId = 0, stopped = false, donutKey = '';
@@ -816,17 +816,25 @@ return view.extend({
 			if (mtdTotal <= 0) return;
 			refs.flashVal.textContent = flashStat.used > 0 ? bytes(flashStat.used) : '—';
 			refs.flashSub.textContent = '共 ' + mib(mtdTotal) + (flashStat.free > 0 ? ' · 可用 ' + bytes(flashStat.free) : '');
-			drawDonut(cvFlashDonut, [
-				{ v: flashStat.used, c: '#2f7ef7' },
-				{ v: Math.max(0, flashStat.total - flashStat.used), c: 'rgba(128,128,128,.35)' }
-			]);
+
+			var reservedColors = [ '#2f7ef7', '#f0b429', '#7c5cf0' ],
+				segs = [], ri = 0;
+
+			(mtdParts || []).forEach(function(p) {
+				if (!p.nested && p.name !== 'firmware')
+					segs.push({ name: p.name, v: p.size, c: reservedColors[ri++ % reservedColors.length] });
+			});
+			segs.push({ name: '固件占用', v: flashStat.used, c: '#10a374' });
+			segs.push({ name: '剩余可用', v: flashStat.free, c: 'rgba(128,128,128,.35)' });
+
+			drawDonut(cvFlashDonut, segs.map(function(s) { return { v: s.v, c: s.c }; }));
+
 			refs.flashLegend.textContent = '';
-			refs.flashLegend.appendChild(E('span', {}, [
-				E('i', { style: 'background:#2f7ef7' }), '已用 ' + bytes(flashStat.used)
-			]));
-			refs.flashLegend.appendChild(E('span', {}, [
-				E('i', { style: 'background:rgba(128,128,128,.35)' }), '可用 ' + bytes(flashStat.free)
-			]));
+			segs.forEach(function(s) {
+				refs.flashLegend.appendChild(E('span', {}, [
+					E('i', { style: 'background:' + s.c }), s.name + ' ' + bytes(s.v)
+				]));
+			});
 		};
 
 		var push = function(arr, v, t, wall) {
@@ -1084,6 +1092,7 @@ return view.extend({
 						freq = Math.round(ci.bogo * 1.5);
 
 					mtdTotal = mtd.total;
+					mtdParts = mtd.parts;
 					renderFlash();
 
 					var sysType = (ci.system || '').replace(/\s+ver.*$/i, ''),
