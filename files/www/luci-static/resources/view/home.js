@@ -19,7 +19,7 @@ var PAD = { l: 14, r: 12, t: 10, b: 12 };
 var PAGE_TITLE = '首页';
 
 var callSystemInfo = rpc.declare({ object: 'system', method: 'info' });
-var callNetDump = rpc.declare({ object: 'network.interface', method: 'dump' });
+var callNetDump = rpc.declare({ object: 'network.interface', method: 'dump', expect: { 'interface': [] } });
 var callNetDevs = rpc.declare({ object: 'luci-rpc', method: 'getNetworkDevices' });
 
 function parseCpu(txt) {
@@ -110,13 +110,13 @@ function ifcGw(ifc) {
 	var rt = ifc && ifc.route;
 	if (Array.isArray(rt))
 		for (var i = 0; i < rt.length; i++)
-			if (rt[i] && rt[i].target === '0.0.0.0' && rt[i].mask === 0 && rt[i].nexthop)
+			if (rt[i] && rt[i].target === '0.0.0.0' && rt[i].mask == 0 && rt[i].nexthop)
 				return rt[i].nexthop;
 	return null;
 }
 
 function ifcDns(ifc) {
-	var d = ifc && ifc.dns;
+	var d = ifc && (ifc['dns-server'] || ifc.dns);
 	return Array.isArray(d) ? d : [];
 }
 
@@ -1217,7 +1217,8 @@ return view.extend({
 
 					renderWireless();
 
-					var dump = Array.isArray(r[15]) ? r[15] : [],
+					var rawDump = r[15],
+					dump = Array.isArray(rawDump) ? rawDump : (rawDump && Array.isArray(rawDump.interface) ? rawDump.interface : []),
 						byName = {};
 					dump.forEach(function(i) { if (i && i.interface) byName[i.interface] = i; });
 
