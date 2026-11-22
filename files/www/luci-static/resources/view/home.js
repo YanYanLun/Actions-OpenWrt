@@ -367,7 +367,7 @@ function parseSwitchPorts(txt) {
 	var sections = [], cur = null;
 
 	(txt || '').split(/\r?\n/).forEach(function(l) {
-		var cfg = l.match(/^config\s+(\S+)\s+(?:'([^']*)'|(\S+))/);
+		var cfg = l.match(/^config\s+(\S+)(?:\s+'([^']*)'|\s+(\S+))?/);
 
 		if (cfg) {
 			cur = { type: cfg[1], name: cfg[2] || cfg[3] || '', opts: {} };
@@ -656,7 +656,7 @@ function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
 	    cos = Math.cos(a), sin = Math.sin(a),
 	    right = cos >= 0,
 	    x1 = cx + r * cos, y1 = cy + r * sin,
-	    x2 = cx + (r + 16) * cos, y2 = cy + (r + 16) * sin,
+	    x2 = cx + (r + 12) * cos, y2 = cy + (r + 12) * sin,
 	    x3 = x2 + (right ? 8 : -8);
 
 	ctx.strokeStyle = 'rgba(0,0,0,.28)';
@@ -688,7 +688,7 @@ function drawDonut(cv, segs) {
 
 	var cx = W / 2,
 	    cy = H / 2,
-	    r = Math.min(W, H) / 2 - 48,
+	    r = Math.min(W, H) / 2 - 56,
 	    r0 = r * 0.64,
 	    a0 = -Math.PI / 2;
 
@@ -834,8 +834,9 @@ return view.extend({
 			'.port-tile .p-speed{ font-size:10px; opacity:.55; margin-top:1px; }',
 			'.port-tile.up .p-state{ color:#10a374; }',
 			'.port-tile.down .p-state{ opacity:.5; }',
-			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; height:100%; }',
-			'.wifi-radio{ height:100%; display:flex; flex-direction:column; border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
+			'.home-main > .home-card{ display:flex; flex-direction:column; }',
+			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; flex:1; min-height:0; }',
+			'.wifi-radio{ min-height:0; display:flex; flex-direction:column; border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
 			'.wifi-radio .wifi-rows{ flex:1; }',
 			'.wifi-top{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }',
 			'.wifi-badge{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; background:rgba(47,126,247,.1); color:#2f7ef7; }',
