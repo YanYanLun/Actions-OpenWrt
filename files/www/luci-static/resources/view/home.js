@@ -656,8 +656,8 @@ function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
 	    cos = Math.cos(a), sin = Math.sin(a),
 	    right = cos >= 0,
 	    x1 = cx + r * cos, y1 = cy + r * sin,
-	    x2 = cx + (r + 14) * cos, y2 = cy + (r + 14) * sin,
-	    x3 = x2 + (right ? 7 : -7);
+	    x2 = cx + (r + 16) * cos, y2 = cy + (r + 16) * sin,
+	    x3 = x2 + (right ? 8 : -8);
 
 	ctx.strokeStyle = 'rgba(0,0,0,.28)';
 	ctx.lineWidth = 1;
@@ -668,7 +668,7 @@ function drawRingLabel(ctx, cx, cy, r, a0, a1, text) {
 	ctx.stroke();
 
 	ctx.fillStyle = 'rgba(0,0,0,.66)';
-	ctx.font = '12px ui-sans-serif,system-ui,sans-serif';
+	ctx.font = '14px ui-sans-serif,system-ui,sans-serif';
 	ctx.textAlign = right ? 'left' : 'right';
 	ctx.textBaseline = 'middle';
 	ctx.fillText(text, x3 + (right ? 3 : -3), y2);
@@ -688,7 +688,7 @@ function drawDonut(cv, segs) {
 
 	var cx = W / 2,
 	    cy = H / 2,
-	    r = Math.min(W, H) / 2 - 42,
+	    r = Math.min(W, H) / 2 - 48,
 	    r0 = r * 0.64,
 	    a0 = -Math.PI / 2;
 
@@ -868,7 +868,7 @@ return view.extend({
 			'.home-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }',
 			'.home-head h4{ margin:0; }',
 			'.home-head .val{ font-size:12px; opacity:.72; font-variant-numeric:tabular-nums; }',
-			'.home-donut{ margin:0 auto; width:100%; max-width:210px; height:210px; }',
+			'.home-donut{ margin:0 auto; width:100%; max-width:220px; height:220px; }',
 			/* SHORTCUTS:BEGIN */
 			'.home-quick{ display:grid; gap:10px; grid-template-columns:repeat(8,minmax(0,1fr)); margin-bottom:12px; }',
 			'.home-quick a{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;',
@@ -1391,9 +1391,9 @@ return view.extend({
 				donutKey = dk;
 
 				drawDonut(cvDonut, [
-					{ v: shown.memUsed, c: '#2f7ef7' },
-					{ v: shown.memCache, c: '#f0b429' },
-					{ v: shown.memFree, c: 'rgba(128,128,128,.35)' }
+					{ v: shown.memUsed, c: '#2f7ef7', name: '已用' },
+					{ v: shown.memCache, c: '#f0b429', name: '缓存' },
+					{ v: shown.memFree, c: 'rgba(128,128,128,.35)', name: '可用' }
 				]);
 
 
