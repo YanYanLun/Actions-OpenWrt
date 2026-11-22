@@ -380,8 +380,17 @@ function parseSwitchPorts(txt) {
 
 		var opt = l.match(/^\s*option\s+(\S+)\s+(?:'([^']*)'|"([^"]*)"|(\S+))/);
 
-		if (opt)
+		if (opt) {
 			cur.opts[opt[1]] = opt[2] !== undefined ? opt[2] : (opt[3] !== undefined ? opt[3] : opt[4]);
+			return;
+		}
+
+		var lst = l.match(/^\s*list\s+(\S+)\s+(?:'([^']*)'|"([^"]*)"|(\S+))/);
+
+		if (lst) {
+			var v = lst[2] !== undefined ? lst[2] : (lst[3] !== undefined ? lst[3] : lst[4]);
+			cur.opts[lst[1]] = (cur.opts[lst[1]] ? cur.opts[lst[1]] + ' ' : '') + v;
+		}
 	});
 
 	var ifDev = {}, vlans = [];
@@ -395,17 +404,27 @@ function parseSwitchPorts(txt) {
 
 	function vid(d) { var m = (d || '').match(/\.(\d+)$/); return m ? m[1] : null; }
 
-	var wanVid = vid(ifDev.wan), lanVid = vid(ifDev.lan), out = { wan: 0, lan: 0 };
-
 	function phys(p) {
 		return (p || '').split(/\s+/).filter(function(x) { return x && !/t$/i.test(x); });
 	}
 
+	var wanVid = vid(ifDev.wan), lanVid = vid(ifDev.lan), out = { wan: 0, lan: 0 };
+
 	vlans.forEach(function(v) {
-		var n = phys(v.ports).length;
-		if (v.vlan === wanVid) out.wan = n;
-		else if (v.vlan === lanVid) out.lan = n;
+		var n = phys(v.ports).length,
+		    vv = v.vlan || v.vid;
+		if (vv === wanVid) out.wan = n;
+		else if (vv === lanVid) out.lan = n;
 	});
+
+	/* 接口设备是网桥等无 VLAN 后缀时：口数多的 VLAN 归 LAN，少的归 WAN */
+	if ((!out.wan || !out.lan) && vlans.length >= 2) {
+		var sorted = vlans.slice().sort(function(a, b) {
+			return phys(b.ports).length - phys(a.ports).length;
+		});
+		if (!out.lan) out.lan = phys(sorted[0].ports).length;
+		if (!out.wan) out.wan = phys(sorted[sorted.length - 1].ports).length;
+	}
 
 	return out;
 }
@@ -800,7 +819,9 @@ return view.extend({
 			'.home-shot canvas{ position:absolute; left:0; top:0; width:100%; height:190px; display:block; pointer-events:none; }',
 			'.home-wide{ display:grid; gap:12px; grid-template-columns:minmax(0,2fr) minmax(0,1fr); margin-top:12px; }',
 			'.home-main{ display:grid; gap:12px; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.25fr); margin-top:12px; }',
-			'.home-stack{ display:grid; gap:12px; align-content:start; }',
+			'.home-stack{ display:grid; gap:12px; grid-template-rows:1fr 1fr; }',
+			'.home-stack .home-card{ display:flex; flex-direction:column; }',
+			'.home-stack .port-box{ flex:1; align-content:center; justify-content:center; }',
 			'.net-rows{ display:grid; gap:7px; font-size:12px; }',
 			'.net-rows .row{ display:flex; justify-content:space-between; gap:10px; }',
 			'.net-rows span{ opacity:.58; }',
@@ -813,8 +834,9 @@ return view.extend({
 			'.port-tile .p-speed{ font-size:10px; opacity:.55; margin-top:1px; }',
 			'.port-tile.up .p-state{ color:#10a374; }',
 			'.port-tile.down .p-state{ opacity:.5; }',
-			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; }',
-			'.wifi-radio{ border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
+			'.home-wifi{ display:grid; gap:10px; grid-template-columns:1fr 1fr; height:100%; }',
+			'.wifi-radio{ height:100%; display:flex; flex-direction:column; border:1px solid rgba(0,0,0,.08); border-radius:10px; padding:11px 12px; }',
+			'.wifi-radio .wifi-rows{ flex:1; }',
 			'.wifi-top{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }',
 			'.wifi-badge{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:6px; background:rgba(47,126,247,.1); color:#2f7ef7; }',
 			'.wifi-dot{ width:7px; height:7px; border-radius:50%; background:#10a374; display:inline-block; }',
