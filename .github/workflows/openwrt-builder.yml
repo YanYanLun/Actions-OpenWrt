@@ -174,10 +174,23 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "设备：HiWiFi HC5761（32MB Flash 改造）" >> release.txt
-        echo "源码：ImmortalWrt $REPO_BRANCH" >> release.txt
-        echo "分区：u-boot 0x0 / hw_panic 0x30000 / factory(art) 0x40000 / firmware 0x50000-0x2000000" >> release.txt
+        {
+          echo "设备：HiWiFi HC5761（32MB Flash 改造）"
+          echo "源码：ImmortalWrt $REPO_BRANCH"
+          echo "编译时间：$(TZ="$TZ" date +"%Y-%m-%d %H:%M %Z")"
+          echo "分区：u-boot 0x0 / hw_panic 0x30000 / factory(art) 0x40000 / firmware 0x50000-0x2000000"
+          echo ""
+          if [ -f RELEASE_NOTES.md ]; then
+            echo "## 本次更新"
+            cat RELEASE_NOTES.md
+            echo ""
+          fi
+          echo "## 最近提交"
+          git -C "$GITHUB_WORKSPACE" log --oneline -10
+          echo ""
+          echo "## 内置 LuCI 插件"
+          grep -E '^CONFIG_PACKAGE_(luci-app|luci-proto)-.+=y' openwrt/.config | sed -E 's/^CONFIG_PACKAGE_(.+)=(y)/- \1/'
+        } > release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
@@ -200,7 +213,7 @@ jobs:
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
-        keep_latest: 3
+        keep_latest: 10
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
